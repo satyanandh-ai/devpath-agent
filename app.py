@@ -1,4 +1,4 @@
-# DevPath Agent - Streamlit UI
+# DevPath Agent - Streamlit UI (Dynamic Skills Version)
 
 import streamlit as st
 import requests
@@ -29,23 +29,21 @@ def get_llm():
 
 llm = get_llm()
 
-# ── Tools ─────────────────────────────────────────────────────────────
+# ── TOOL 1: Dynamic Skills Lookup (No more hardcoded dictionary!) ────
 @tool
 def get_skills_for_role(role: str) -> str:
-    """Returns the required skills for a given job role."""
-    skills_db = {
-        "backend developer": "Python, FastAPI, SQL, REST APIs, Docker, Git",
-        "machine learning": "Python, NumPy, Pandas, Scikit-learn, TensorFlow, SQL, Cloud (AWS/GCP)",
-        "data analyst": "Python, SQL, Excel, Power BI, Statistics, Pandas",
-        "frontend developer": "HTML, CSS, JavaScript, React, Git",
-        "data scientist": "Python, NumPy, Pandas, Scikit-learn, TensorFlow, Statistics, SQL",
-    }
-    role = role.lower()
-    for key in skills_db:
-        if key in role:
-            return f"Skills needed for {role}: {skills_db[key]}"
-    return "Role not found."
+    """Returns the required technical skills for ANY given job role using AI knowledge."""
+    prompt = (
+        f"List the top 8-10 technical skills required for a '{role}' role in 2026. "
+        f"Reply with ONLY a comma-separated list of skill names, no explanation, no numbering."
+    )
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return f"Skills needed for {role}: {response.content.strip()}"
+    except Exception as e:
+        return f"ERROR: Could not fetch skills for '{role}': {str(e)}"
 
+# ── TOOL 2: GitHub Analyzer ──────────────────────────────────────────
 @tool
 def analyze_github(username: str) -> str:
     """Analyzes a GitHub profile and returns repo information."""
@@ -55,7 +53,7 @@ def analyze_github(username: str) -> str:
         if user_response.status_code == 404:
             return f"ERROR: GitHub user '{username}' not found."
         if user_response.status_code != 200:
-            return f"ERROR: GitHub API error."
+            return f"ERROR: GitHub API error. Status: {user_response.status_code}"
 
         user_data = user_response.json()
         repos_url = f"https://api.github.com/users/{username}/repos"
@@ -81,6 +79,10 @@ def analyze_github(username: str) -> str:
         result += "Top Repositories:\n" + "\n".join(repo_info)
         return result
 
+    except requests.exceptions.ConnectionError:
+        return "ERROR: No internet connection. Please check your network."
+    except requests.exceptions.Timeout:
+        return "ERROR: GitHub API timed out. Please try again."
     except Exception as e:
         return f"ERROR: {str(e)}"
 
@@ -149,6 +151,7 @@ with tab1:
             with st.spinner(f"Fetching GitHub profile of '{github_username}'..."):
                 query = f"Use the analyze_github tool to analyze GitHub profile of {github_username}. Tell me: 1) what kind of developer they are 2) their main skills 3) quality of their projects"
                 result = ask_agent(query)
+
             if "ERROR" in result:
                 st.error(result)
             else:
@@ -212,6 +215,7 @@ Be specific, honest, and helpful."""
 with tab3:
     st.header("🌉 Personalized Bridge Plan")
     st.write("Cross-reference your GitHub with your career goal to get a custom roadmap!")
+    st.caption("💡 Try any role: Backend Developer, MLOps Engineer, Data Engineer, LLM Engineer, etc.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -223,41 +227,46 @@ with tab3:
     with col2:
         bridge_goal = st.text_input(
             "Your Career Goal",
-            placeholder="e.g. machine learning engineer",
+            placeholder="e.g. MLOps Engineer",
             key="bridge_goal"
         )
 
     if st.button("🌉 Build My Bridge Plan", key="bridge_btn"):
         if bridge_github.strip() and bridge_goal.strip():
-            with st.spinner("Fetching your GitHub profile..."):
+            with st.spinner("🔍 Fetching your GitHub profile..."):
                 github_data = analyze_github.invoke({"username": bridge_github})
 
             if "ERROR" in github_data:
                 st.error(github_data)
             else:
-                with st.spinner("Building your personalized bridge plan..."):
+                with st.spinner(f"🎯 Researching required skills for '{bridge_goal}'..."):
                     required_skills = get_skills_for_role.invoke({"role": bridge_goal})
 
-                    prompt = f"""You are a career advisor helping a developer level up.
+                if "ERROR" in required_skills:
+                    st.error(required_skills)
+                else:
+                    with st.spinner("🌉 Building your personalized bridge plan..."):
+                        prompt = f"""You are a career advisor helping a developer level up.
 
-CURRENT SKILLS from GitHub:
+CURRENT SKILLS (from their GitHub):
 {github_data}
 
 TARGET CAREER GOAL: {bridge_goal}
-REQUIRED SKILLS: {required_skills}
+REQUIRED SKILLS FOR GOAL: {required_skills}
 
-Give:
-1. SKILLS THEY ALREADY HAVE
-2. SKILL GAPS
-3. BRIDGE PLAN - 30-60-90 day action plan
+Do a CROSS-REFERENCE analysis:
+
+1. SKILLS THEY ALREADY HAVE - What skills match the goal?
+2. SKILL GAPS - What skills are missing?
+3. BRIDGE PLAN - Specific 30-60-90 day action plan
 4. FIRST STEP - What to do TODAY
 
-Be specific. Use their actual GitHub projects."""
+Be specific. Use their actual GitHub projects as reference."""
 
-                    result = ask_llm(prompt)
+                        result = ask_llm(prompt)
 
-                st.success("✅ Your Bridge Plan is Ready!")
-                st.markdown(result)
+                    st.success("✅ Your Bridge Plan is Ready!")
+                    st.markdown(result)
         else:
             st.warning("Please fill in both fields!")
 
@@ -277,8 +286,9 @@ with tab4:
 
     if st.button("💬 Ask Agent", key="chat_btn"):
         if career_question.strip():
-            with st.spinner("Agent is thinking..."):
+            with st.spinner("🤖 Agent is thinking..."):
                 result = ask_agent(career_question)
+
             st.success("✅ Done!")
             st.markdown(result)
         else:
