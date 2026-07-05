@@ -22,9 +22,14 @@ st.set_page_config(
 # ── LLM Setup ─────────────────────────────────────────────────────────
 @st.cache_resource
 def get_llm():
+    # ✅ FIXED: Reads from Streamlit Cloud Secrets OR local .env file
+    api_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
+    if not api_key:
+        st.error("❌ GROQ_API_KEY not found! Please add it in Streamlit Cloud → Settings → Secrets.")
+        st.stop()
     return ChatGroq(
         model="llama-3.3-70b-versatile",
-        api_key=os.getenv("GROQ_API_KEY")
+        api_key=api_key
     )
 
 llm = get_llm()
