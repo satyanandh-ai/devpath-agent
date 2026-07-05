@@ -123,6 +123,12 @@ devpath-agent/
 | 💼 Working Professionals | Identify upskilling needs to switch roles or get promoted |
 | 👨‍💻 Developers | Understand how their GitHub profile looks to recruiters in seconds |
 
+## Live Demo
+
+🚀 Live App: https://devpath-agent-satya.streamlit.app
+
+📂 GitHub: https://github.com/satyanandh-ai/devpath-agent
+
 ## 👤 Author
 
 **Ch. Satyanand**
