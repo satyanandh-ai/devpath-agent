@@ -1,7 +1,9 @@
-﻿streamlit
+streamlit
+requests
+plotly
+python-dotenv
+pypdf
 langchain
+langchain-core
 langchain-groq
 langgraph
-pypdf2
-requests
-python-dotenv
