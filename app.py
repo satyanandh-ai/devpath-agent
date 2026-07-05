@@ -486,6 +486,7 @@ with tab4:
             st.warning("Please type your question.")
 
 # ── Footer ────────────────────────────────────────────────────────────
+<<<<<<< HEAD
 st.markdown("<br><br>", unsafe_allow_html=True)
 st.markdown("""
 <div style="text-align:center; padding:20px; border-top:1px solid #E8E6FF;
@@ -496,3 +497,7 @@ st.markdown("""
     <strong style="color:#5B4FE9;">Ch. Satyanand</strong> · ALIET Vijayawada
 </div>
 """, unsafe_allow_html=True)
+=======
+st.divider()
+st.caption("🚀 DevPath Agent | Built with LangChain + LangGraph + Groq + Streamlit | Agentic Arena 2026 | Ch. Satyanand | ALIET Vijayawada")
+>>>>>>> 4b94974785903d3c6d45d8b95b88e3ac1f26c625
