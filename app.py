@@ -232,62 +232,101 @@ def build_github_skill_text(github_data: dict) -> str:
     return "\n".join(lines)
 
 # ══════════════════════════════════════════════════════════════════════
-#  REAL ATS SCORE ENGINE (5 computed categories — no LLM)
+#  REAL ATS SCORE ENGINE — Strict, Realistic, 5 Categories
+#  No LLM. No fake 100/100. Partial scoring at every level.
 # ══════════════════════════════════════════════════════════════════════
 def compute_ats_score(resume_text: str) -> dict:
     text = resume_text.lower()
 
     # ── Category 1: Contact Info (20pts) ─────────────────────────────
+    # Each item scored individually — not all-or-nothing
     has_email    = bool(re.search(r"[\w\.-]+@[\w\.-]+\.\w+", resume_text))
     has_phone    = bool(re.search(r"(\+?\d[\d\-\s]{8,}\d)", resume_text))
     has_linkedin = "linkedin" in text
     has_github   = "github" in text
-    contact_score = sum([has_email*8, has_phone*6, has_linkedin*3, has_github*3])
+    contact_score = sum([has_email*5, has_phone*5, has_linkedin*5, has_github*5])
 
     # ── Category 2: Resume Sections (20pts) ──────────────────────────
+    # 4pts per section — partial scoring
     sections = {
-        "Education":    any(k in text for k in ["education","b.tech","bachelor","university","college","degree"]),
-        "Experience":   any(k in text for k in ["experience","internship","work history"]),
-        "Projects":     "project" in text,
-        "Skills":       "skill" in text,
-        "Summary/Obj":  any(k in text for k in ["summary","objective","about","profile"]),
+        "Summary/Objective": any(k in text for k in ["summary","objective","about","profile","overview"]),
+        "Education":         any(k in text for k in ["education","b.tech","bachelor","university","college","degree","b.e","m.tech"]),
+        "Skills":            any(k in text for k in ["skills","technologies","tech stack","tools"]),
+        "Projects":          any(k in text for k in ["project","built","developed","created"]),
+        "Experience":        any(k in text for k in ["experience","internship","work","employment","position"]),
     }
-    section_score = round((sum(sections.values())/len(sections))*20)
+    section_score = sum(sections.values()) * 4  # 4 pts each, max 20
 
     # ── Category 3: Skills Coverage (20pts) ──────────────────────────
+    # Tiered scoring — not linear, harder to max out
     tech_keywords = [
         "python","java","javascript","react","node","sql","docker","kubernetes",
         "aws","gcp","azure","machine learning","deep learning","tensorflow","pytorch",
         "pandas","numpy","git","api","fastapi","flask","django","langchain","llm","nlp",
-        "data science","scikit","streamlit","mongodb","postgresql","redis","linux"
+        "data science","scikit","streamlit","mongodb","postgresql","redis","linux",
+        "opencv","huggingface","transformers","spark","hadoop","airflow","kafka"
     ]
     found_keywords = [kw for kw in tech_keywords if kw in text]
-    skills_score = min(20, len(found_keywords)*2)
+    n = len(found_keywords)
+    if n <= 3:    skills_score = 5
+    elif n <= 6:  skills_score = 10
+    elif n <= 10: skills_score = 14
+    elif n <= 15: skills_score = 17
+    else:         skills_score = 20
 
-    # ── Category 4: Keywords & Impact (20pts) ────────────────────────
-    has_quantified = bool(re.search(r"\d+%|\d+x\b|\$\d+|\b\d+\+?\s?(users|students|projects|repos|accuracy|ms|seconds)", text))
-    action_verbs   = ["built","developed","designed","led","created","implemented","deployed",
-                      "optimized","managed","automated","improved","reduced","increased","launched","trained"]
-    verb_count     = sum(1 for v in action_verbs if v in text)
-    keyword_score  = (10 if has_quantified else 0) + min(10, verb_count*2)
+    # ── Category 4: Keywords & Action Verbs (20pts) ───────────────────
+    # 10pts for action verbs (tiered), 10pts for quantified impact
+    action_verbs = [
+        "built","developed","designed","led","created","implemented","deployed",
+        "optimized","managed","automated","improved","reduced","increased",
+        "launched","trained","integrated","architected","scaled","delivered","published"
+    ]
+    verb_count = sum(1 for v in action_verbs if v in text)
+    if verb_count == 0:   verb_score = 0
+    elif verb_count <= 2: verb_score = 3
+    elif verb_count <= 4: verb_score = 6
+    elif verb_count <= 7: verb_score = 8
+    else:                 verb_score = 10
 
-    # ── Category 5: Formatting (20pts) ───────────────────────────────
-    word_count   = len(resume_text.split())
-    good_length  = 300 <= word_count <= 1200
-    has_bullets  = any(c in resume_text for c in ["•","●","▪","◦","-"])
-    not_too_long = word_count <= 1200
-    format_score = sum([good_length*10, has_bullets*5, not_too_long*5])
+    # Quantified impact — numbers, percentages, scales
+    quant_matches = re.findall(
+        r"\d+%|\d+x|\$\d+|\d+\+?\s?(users|students|projects|repos|accuracy|ms|hours|days|models|apis|endpoints|clients)",
+        text
+    )
+    quant_count = len(quant_matches)
+    if quant_count == 0:   quant_score = 0
+    elif quant_count == 1: quant_score = 4
+    elif quant_count == 2: quant_score = 7
+    else:                  quant_score = 10
 
-    total = min(100, contact_score + section_score + skills_score + keyword_score + format_score)
+    keyword_score = verb_score + quant_score
+
+    # ── Category 5: Formatting & Length (20pts) ───────────────────────
+    word_count = len(resume_text.split())
+    # Ideal resume: 350–800 words for students
+    if word_count < 150:    length_score = 2
+    elif word_count < 300:  length_score = 6
+    elif word_count <= 800: length_score = 10
+    elif word_count <= 1200:length_score = 7
+    else:                   length_score = 4  # too long
+
+    has_bullets   = any(c in resume_text for c in ["•","●","▪","◦"])
+    has_sections_caps = bool(re.search(r"(?m)^[A-Z][A-Z\s]{3,}$", resume_text))  # ALL CAPS section headers
+    has_dates     = bool(re.search(r"(20\d{2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", text))
+    format_score  = length_score + (4 if has_bullets else 0) + (3 if has_dates else 0) + (3 if has_sections_caps else 0)
+    format_score  = min(20, format_score)
+
+    total = min(99, contact_score + section_score + skills_score + keyword_score + format_score)
+    # Cap at 99 — a perfect resume is rare; 100 is never auto-given
 
     return {
         "score": total,
         "categories": {
-            "Contact Info":      {"score": contact_score,  "max": 20},
-            "Resume Sections":   {"score": section_score,  "max": 20},
-            "Skills Coverage":   {"score": skills_score,   "max": 20},
-            "Keywords & Impact": {"score": keyword_score,  "max": 20},
-            "Formatting":        {"score": format_score,   "max": 20},
+            "Contact Info":        {"score": contact_score,  "max": 20},
+            "Resume Sections":     {"score": section_score,  "max": 20},
+            "Skills Coverage":     {"score": skills_score,   "max": 20},
+            "Keywords & Verbs":    {"score": keyword_score,  "max": 20},
+            "Formatting & Length": {"score": format_score,   "max": 20},
         },
         "sections":         sections,
         "found_keywords":   found_keywords,
@@ -296,8 +335,10 @@ def compute_ats_score(resume_text: str) -> dict:
         "has_linkedin":     has_linkedin,
         "has_github_link":  has_github,
         "word_count":       word_count,
-        "has_quantified":   has_quantified,
         "verb_count":       verb_count,
+        "quant_count":      quant_count,
+        "has_bullets":      has_bullets,
+        "has_dates":        has_dates,
     }
 
 # ══════════════════════════════════════════════════════════════════════
@@ -998,12 +1039,15 @@ Resume:
                 ic="✅" if val else "❌"; c="#22C55E" if val else "#E91E63"
                 st.markdown(f'<span style="color:{c};font-size:12px;font-weight:500;margin-right:14px;">{ic} {label}</span>',unsafe_allow_html=True)
 
-            st.markdown(f'<div style="font-size:12px;color:#9090A8;margin-top:12px;">Word count: {ad["word_count"]} · Action verbs: {ad["verb_count"]} · Quantified impact: {"✅" if ad["has_quantified"] else "❌"}</div>',unsafe_allow_html=True)
+            st.markdown(f'<div style="font-size:12px;color:#9090A8;margin-top:12px;">Word count: {ad["word_count"]} · Action verbs: {ad["verb_count"]} · Quantified achievements: {ad.get("quant_count",0)}</div>',unsafe_allow_html=True)
             st.markdown('</div>',unsafe_allow_html=True)
 
             if st.session_state.ats_data["found_keywords"]:
                 st.markdown('<div class="dp-panel"><div class="dp-panel-title">🔑 Tech Keywords Found</div>',unsafe_allow_html=True)
-                st.markdown("".join(f'<span class="tag-neutral">{k}</span>' for k in st.session_state.ats_data["found_keywords"][:16]),unsafe_allow_html=True)
+                # Display as clean spaced badges
+                badges = "".join(f'<span class="tag-neutral" style="margin:4px;display:inline-block;">{k.title()}</span>' for k in st.session_state.ats_data["found_keywords"][:20])
+                st.markdown(f'<div style="line-height:2.2;">{badges}</div>',unsafe_allow_html=True)
+                st.markdown(f'<div style="font-size:11px;color:#9090A8;margin-top:10px;">{len(st.session_state.ats_data["found_keywords"])} keywords detected</div>',unsafe_allow_html=True)
                 st.markdown('</div>',unsafe_allow_html=True)
 
     if st.session_state.resume_skills:
