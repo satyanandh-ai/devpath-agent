@@ -1,9 +1,11 @@
-﻿streamlit
-requests
-plotly
-python-dotenv
-pypdf
+streamlit
 langchain
-langchain-core
 langchain-groq
 langgraph
+pypdf
+requests
+python-dotenv
+plotly
+reportlab
+chromadb
+numpy
