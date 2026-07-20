@@ -816,7 +816,6 @@ if page=="🏠  Overview":
             st.markdown('<div style="font-size:12px;color:#C8C8D8;padding:20px 0;">No activity yet.</div>',unsafe_allow_html=True)
         ce()
 
-<<<<<<< HEAD
     # RAG Live Demo Panel
     if RAG_AVAILABLE:
         st.markdown("<br>",unsafe_allow_html=True)
@@ -841,8 +840,6 @@ if page=="🏠  Overview":
             st.info("RAG engine initializing...")
         ce()
 
-=======
->>>>>>> 2667dee10865b74b15678ae44510e6721881c84b
     st.markdown("<br>",unsafe_allow_html=True)
     b1,b2,b3=st.columns([1.5,1.5,1])
     with b1:
@@ -1265,7 +1262,6 @@ elif page=="🎤  Interview Prep":
     with c1: tr=st.text_input("Target Role",placeholder="e.g. AI Engineer")
     with c2: diff=st.selectbox("Difficulty",["Beginner","Intermediate","Advanced"])
     if st.button("🎤 Generate Questions") and tr.strip():
-<<<<<<< HEAD
         with st.spinner("🔍 Retrieving interview questions from database..."):
             known=list(set((st.session_state.github_skills or [])+(st.session_state.resume_skills or [])))
 
@@ -1302,26 +1298,17 @@ Q2: ...""")
                 resp=ask_llm(f"Senior interviewer at top tech company.\n5 interview questions for '{tr}' at '{diff}' level.\nCandidate knows:{known[:10] if known else 'unknown'}\nFormat EXACTLY:\nQ1: [question]\nHINT: [one line what good answer covers]\nQ2: ... up to Q5. Make technical and specific.")
                 st.session_state.interview_source = "AI Generated"
 
-=======
-        with st.spinner("Generating..."):
-            known=list(set((st.session_state.github_skills or [])+(st.session_state.resume_skills or [])))
-            resp=ask_llm(f"Senior interviewer at top tech company.\n5 interview questions for '{tr}' at '{diff}' level.\nCandidate knows:{known[:10] if known else 'unknown'}\nFormat EXACTLY:\nQ1: [question]\nHINT: [one line what good answer covers]\nQ2: ... up to Q5. Make technical and specific.")
->>>>>>> 2667dee10865b74b15678ae44510e6721881c84b
             st.session_state.interview_questions=resp; st.session_state.interview_role=tr
             st.session_state.interview_feedback={}
         log_activity(f"Interview prep: {tr}","🎤"); st.success("✅ Questions ready!")
     ce()
     if st.session_state.get("interview_questions"):
         st.markdown("<br>",unsafe_allow_html=True)
-<<<<<<< HEAD
         source = st.session_state.get("interview_source","")
         source_badge = f'<span style="background:#F0FDF4;color:#16A34A;border:1px solid #BBF7D0;border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;margin-left:10px;">🔍 {source}</span>' if source else ""
         cs(f"🎤 {st.session_state.get('interview_role','')} Interview Questions")
         if source:
             st.markdown(f'<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:8px 14px;margin-bottom:12px;font-size:12px;color:#16A34A;font-weight:600;">🔍 Source: {source}</div>',unsafe_allow_html=True)
-=======
-        cs(f"🎤 {st.session_state.get('interview_role','')} Interview Questions")
->>>>>>> 2667dee10865b74b15678ae44510e6721881c84b
         lines=st.session_state.interview_questions.strip().split('\n')
         questions=[]; i=0
         while i<len(lines):
@@ -1382,7 +1369,6 @@ elif page=="🔍  Opportunities":
 #  CAREER CHAT — RAG-Powered Personalized
 # ══════════════════════════════════════════════════════════════════════
 elif page=="💬  Career Chat":
-<<<<<<< HEAD
     ph("💬 Career Chat","Personalized answers using your profile + RAG knowledge base.")
     st.markdown('<div style="padding:0 28px;">',unsafe_allow_html=True)
 
@@ -1489,16 +1475,5 @@ Keep it concise but highly specific — not generic."""
             </div>
             <div style="font-size:14px;color:#1E1E2E;line-height:1.7;">{answer}</div>
         </div>''', unsafe_allow_html=True)
-=======
-    ph("💬 Career Chat","Agent-driven advisor. Calls GitHub + role tools when needed.")
-    st.markdown('<div style="padding:0 28px;">',unsafe_allow_html=True)
-    cs()
-    st.markdown('<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;"><span class="tag-pink">💡 Skills for AI internship?</span><span class="tag-pink">📝 Cold email template?</span><span class="tag-pink">🚀 Switch to ML?</span><span class="tag-pink">💰 Salary negotiation?</span></div>',unsafe_allow_html=True)
-    q=st.text_area("Your question",height=110,label_visibility="collapsed",placeholder="e.g. What skills do I need for an MLOps role in 2026?")
-    if st.button("💬 Ask Agent") and q.strip():
-        with st.spinner("Agent is thinking..."):
-            answer=ask_agent(q)
-        st.markdown(f'<div style="background:#FFF5F7;border:1px solid #FFD6E0;border-left:4px solid #E91E63;border-radius:12px;padding:18px 22px;margin-top:14px;"><div style="font-size:11px;font-weight:700;color:#E91E63;letter-spacing:1px;margin-bottom:10px;">AGENT RESPONSE</div><div style="font-size:14px;color:#1E1E2E;line-height:1.7;">{answer}</div></div>',unsafe_allow_html=True)
->>>>>>> 2667dee10865b74b15678ae44510e6721881c84b
     ce()
     st.markdown('</div>',unsafe_allow_html=True)
