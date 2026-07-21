@@ -1,142 +1,315 @@
-# 🚀 OpenAI Build Week Submission
+# ⚡ DevPath — AI Career Intelligence Platform
 
-## Problem
+<div align="center">
 
-Students spend hundreds of hours learning skills, building projects, and applying for internships without knowing a critical truth:
+### 🚀 Your Autonomous AI Career Co-Pilot
 
-**Are they actually job-ready?**
+**Built with GPT-5.6 • Codex • LangChain • LangGraph • RAG**
 
-Traditional ATS tools only score resumes.
-GitHub analyzers only inspect repositories.
+<p align="center">
+  <img src="https://img.shields.io/badge/OpenAI-GPT--5.6-black?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Codex-Agent-blue?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/LangChain-Orchestration-green?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/RAG-ChromaDB-orange?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Streamlit-Frontend-red?style=for-the-badge" />
+</p>
+
+### 🎯 OpenAI Build Week 2026 Submission
+
+*"Most career tools tell you what you have. DevPath tells you what you're missing, why it matters, and exactly what to do next."*
+
+[🚀 Live Demo](YOUR_DEMO_LINK) • [🎥 Demo Video](YOUR_VIDEO_LINK) • [📄 Devpost Submission](YOUR_DEVPOST_LINK)
+
+</div>
+
+---
+
+## 🌟 The Problem
+
+Every year, millions of students build projects, complete courses, and apply for jobs without knowing:
+
+* ❓ Are they actually job-ready?
+* ❓ Which skills are holding them back?
+* ❓ Does their GitHub prove what their resume claims?
+* ❓ What should they learn next?
+* ❓ How do recruiters really evaluate them?
+
+Most tools solve only one piece of the puzzle.
+
+Resume checkers score resumes.
+
+GitHub analyzers inspect repositories.
+
+Job boards show openings.
+
 Career platforms provide generic advice.
 
-None connect:
-
-* Resume claims
-* Real project evidence
-* Current job market demand
-* Interview readiness
-* Personalized career guidance
-
-As a result, students often learn the wrong skills, overestimate their readiness, and miss opportunities.
+**None combine all of these into a single intelligent career system.**
 
 ---
 
-## Solution — DevPath
+## 🚀 Introducing DevPath
 
-**DevPath is an AI Career Intelligence Platform that acts as an autonomous career co-pilot.**
+DevPath is an AI-powered Career Intelligence Platform that transforms fragmented career data into personalized career guidance.
 
-Instead of simply analyzing a resume, DevPath evaluates a candidate across multiple dimensions:
+Instead of providing generic recommendations, DevPath combines:
 
-* Resume Quality
-* GitHub Portfolio Strength
-* Resume ↔ GitHub Credibility
-* Job Market Readiness
-* Interview Performance
-* Career Roadmapping
+📄 Resume Intelligence
 
-The result is a personalized career intelligence system that tells users:
+🐙 GitHub Portfolio Analysis
 
-> What skills they have,
-> What skills they are missing,
-> Why those gaps matter,
-> And exactly what they should do next.
+📈 Market Intelligence
 
----
+🌉 Credibility Verification
 
-## Why This Matters
+🎤 Interview Readiness
 
-The gap between education and industry is growing rapidly.
+🧠 Retrieval-Augmented Career Knowledge
 
-Students often ask:
+🤖 GPT-5.6 Career Coaching
 
-* Am I ready for AI Engineer roles?
-* Which skills matter most right now?
-* Does my GitHub actually support my resume?
-* What should I learn next?
-
-DevPath provides data-driven answers using AI, retrieval systems, and career intelligence engines.
+to generate personalized, evidence-backed career guidance.
 
 ---
 
-## How We Used GPT-5.6
+## ✨ Key Features
+
+### 📄 Resume Intelligence Engine
+
+Analyze resumes using a multi-factor ATS evaluation framework.
+
+✅ Resume Quality Assessment
+
+✅ Skills Extraction
+
+✅ Keyword Analysis
+
+✅ Improvement Recommendations
+
+✅ Role Suggestions
+
+---
+
+### 🐙 GitHub Intelligence Engine
+
+Evaluate real portfolio strength using repository signals.
+
+✅ Repository Quality Analysis
+
+✅ Documentation Assessment
+
+✅ Activity Tracking
+
+✅ Project Ranking
+
+✅ Portfolio Scoring
+
+---
+
+### 🌉 Reality Check Engine
+
+The feature that makes DevPath different.
+
+Compare:
+
+📄 Resume Claims
+
+vs
+
+🐙 GitHub Evidence
+
+Automatically verify whether claimed skills are actually demonstrated through projects.
+
+Example:
+
+```text
+Python        ✓ Verified
+FastAPI       ✓ Verified
+LangChain     ✓ Verified
+Docker        ✗ Missing Evidence
+AWS           ✗ Missing Evidence
+```
+
+---
+
+### 📈 Market Intelligence
+
+Benchmark users against current AI and software engineering roles.
+
+Generate:
+
+* Market Readiness Score
+* Skill Gap Analysis
+* Salary Insights
+* Emerging Skill Recommendations
+* Career Growth Opportunities
+
+---
+
+### 🧠 RAG Knowledge Engine
+
+Every recommendation is grounded in retrieved evidence.
+
+Sources include:
+
+💼 Job Profiles
+
+🎤 Interview Questions
+
+📚 Learning Resources
+
+🧠 Career Knowledge Base
+
+This dramatically reduces hallucinations and improves recommendation quality.
+
+---
+
+### 🎤 AI Interview Coach
+
+Practice interviews directly inside DevPath.
+
+Features:
+
+✅ Role-specific questions
+
+✅ Answer evaluation
+
+✅ Personalized feedback
+
+✅ Improvement suggestions
+
+✅ Interview readiness scoring
+
+---
+
+## 🤖 How We Used GPT-5.6
 
 GPT-5.6 serves as the intelligence layer of DevPath.
 
-It is used to:
+It powers:
 
-* Analyze resume content
-* Generate personalized career recommendations
-* Explain market readiness results
-* Evaluate interview answers
-* Produce tailored learning roadmaps
-* Generate recruiter-style feedback
-* Deliver contextual career coaching
+* Career coaching
+* Skill gap analysis
+* Personalized roadmaps
+* Resume recommendations
+* Interview feedback
+* Career strategy generation
+* Context-aware guidance
 
-Rather than generating generic advice, GPT-5.6 receives structured signals from DevPath's scoring engines and transforms them into actionable guidance.
-
-This creates recommendations that are personalized, evidence-backed, and aligned with real career goals.
+Rather than generating generic responses, GPT-5.6 receives structured signals from DevPath's scoring engines and transforms them into actionable recommendations.
 
 ---
 
-## How We Used Codex
+## ⚙️ How We Used Codex
 
-Codex was used throughout development to accelerate implementation and iteration.
+Codex accelerated development across the entire project lifecycle.
 
 Examples include:
 
-* Refactoring application components
-* Debugging workflow issues
-* Improving architecture decisions
-* Generating documentation
-* Accelerating feature development
-* Reviewing code changes
-* Improving maintainability
+* Feature implementation
+* Code generation
+* Architecture refinement
+* Bug fixing
+* Refactoring
+* Documentation improvements
+* Rapid prototyping
 
-The project was developed iteratively with Codex acting as a development partner while preserving full control over architecture and product decisions.
-
----
-
-## Technical Innovation
-
-DevPath combines multiple AI and non-AI systems:
-
-### Resume Intelligence Engine
-
-Rule-based ATS scoring with explainable outputs.
-
-### GitHub Intelligence Engine
-
-Portfolio analysis using repository signals.
-
-### Reality Check Engine
-
-Resume claims are verified against GitHub evidence.
-
-### Market Intelligence Engine
-
-Role-specific demand analysis and skill gap detection.
-
-### RAG Knowledge System
-
-Retrieval-first architecture using ChromaDB collections.
-
-### Career Copilot
-
-GPT-5.6 synthesizes all signals into actionable recommendations.
+Codex acted as a development partner while core product decisions remained developer-driven.
 
 ---
 
-## Impact
+## 🏗️ System Architecture
 
-DevPath helps students:
+```text
+Resume Engine ─┐
+               │
+GitHub Engine ─┼──► DevPath Intelligence Layer ─► GPT-5.6
+               │
+Market Engine ─┤
+               │
+RAG Engine ────┘
+```
 
-* Identify skill gaps faster
-* Improve resumes strategically
-* Build stronger portfolios
-* Prepare for interviews
-* Align learning with market demand
-* Make better career decisions
+Outputs:
+
+📊 Career Readiness
+
+📈 Market Readiness
+
+🌉 Credibility Score
+
+👔 Recruiter Assessment
+
+🎯 Personalized Roadmap
+
+---
+
+## 🚀 Tech Stack
+
+| Layer             | Technology            |
+| ----------------- | --------------------- |
+| Frontend          | Streamlit             |
+| AI Model          | GPT-5.6               |
+| Development Agent | Codex                 |
+| Orchestration     | LangChain + LangGraph |
+| Retrieval         | ChromaDB              |
+| GitHub Analysis   | GitHub API            |
+| Visualizations    | Plotly                |
+| Reports           | ReportLab             |
+| Deployment        | Streamlit Cloud       |
+
+---
+
+## 🎬 Demo Flow
+
+1️⃣ Upload Resume
+
+2️⃣ Analyze GitHub Profile
+
+3️⃣ Verify Resume Claims
+
+4️⃣ Generate Career Intelligence Report
+
+5️⃣ Identify Market Skill Gaps
+
+6️⃣ Practice Interview Questions
+
+7️⃣ Receive Personalized GPT-5.6 Roadmap
+
+---
+
+## 🏆 Why DevPath Stands Out
+
+| Capability       | Traditional Tools | DevPath                           |
+| ---------------- | ----------------- | --------------------------------- |
+| Resume Review    | Generic ATS Score | Intelligent Multi-Factor Analysis |
+| GitHub Review    | Manual Inspection | Automated Portfolio Intelligence  |
+| Skill Validation | None              | Resume ↔ GitHub Verification      |
+| Career Guidance  | Generic Advice    | Personalized GPT-5.6 Coaching     |
+| Market Insights  | Limited           | Role-Specific Intelligence        |
+| Interview Prep   | Static Questions  | AI Evaluation & Feedback          |
+
+---
+
+## 👨‍💻 Built By
+
+### Ch. Satyanand
+
+🎓 B.Tech AI & ML
+
+🏫 Andhra Loyola Institute of Engineering & Technology
+
+📍 Vijayawada, Andhra Pradesh, India
+
+🔗 GitHub: https://github.com/satyanandh-ai
+
+---
+
+## ⭐ Vision
+
+DevPath's mission is simple:
+
+**Help students make smarter career decisions using AI.**
 
 Instead of asking:
 
@@ -146,25 +319,14 @@ Users can ask:
 
 > "What is the highest-impact action I should take next to become job-ready?"
 
-And receive a personalized answer grounded in evidence.
+and receive a personalized answer backed by evidence, market data, and AI reasoning.
 
 ---
 
-## Future Roadmap
+<div align="center">
 
-* Live job scraping
-* Agentic internship application assistant
-* LinkedIn profile intelligence
-* Multi-agent career planning workflows
-* Continuous skill tracking
-* Recruiter-facing talent reports
+### 🚀 Built for OpenAI Build Week 2026
 
----
+**GPT-5.6 • Codex • Career Intelligence • Agentic Workflows**
 
-## Built For OpenAI Build Week 2026
-
-DevPath demonstrates how GPT-5.6 can transform fragmented career data into personalized career intelligence and actionable guidance.
-
-The goal is simple:
-
-**Help students make smarter career decisions using AI.**
+</div>
