@@ -301,7 +301,7 @@ def get_llm():
     if not groq_key:
         st.error("❌ GROQ_API_KEY not found! Add it in Streamlit Secrets.")
         st.stop()
-    return ChatGroq(model="llama3-70b-8192", api_key=groq_key)
+    return ChatGroq(model="llama-3.3-70b-versatile", api_key=groq_key)
 
 llm = get_llm()
 
