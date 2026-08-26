@@ -6,7 +6,11 @@ import requests
 import json
 import os
 import re
-import plotly.graph_objects as go
+try:
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
 from datetime import datetime
 from io import BytesIO
 from dotenv import load_dotenv
@@ -176,18 +180,33 @@ try:
             self.initialize()
             return {k: v.count() for k,v in self._collections.items()}
 
-    devpath_rag = _DevPathRAG()
+    _rag_instance = _DevPathRAG()
     RAG_AVAILABLE = True
 
 except Exception as _rag_err:
     RAG_AVAILABLE = False
-    devpath_rag = None
+    _rag_instance = None
+
+@st.cache_resource(show_spinner=False)
+def get_rag():
+    """Initialize RAG once per session — cached, never re-seeded."""
+    if not RAG_AVAILABLE or _rag_instance is None:
+        return None
+    _rag_instance.initialize()
+    return _rag_instance
+
+devpath_rag = get_rag()
 
 st.set_page_config(
     page_title="DevPath — AI Career Copilot",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items={
+        "Get Help": None,
+        "Report a bug": None,
+        "About": "⚡ DevPath — AI Career Intelligence Platform"
+    }
 )
 
 st.markdown("""
@@ -276,13 +295,13 @@ hr { border-color:#F0EEF8 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def get_llm():
-    api_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
-    if not api_key:
-        st.error("❌ GROQ_API_KEY not found!")
+    groq_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
+    if not groq_key:
+        st.error("❌ GROQ_API_KEY not found! Add it in Streamlit Secrets.")
         st.stop()
-    return ChatGroq(model="llama-3.3-70b-versatile", api_key=api_key)
+    return ChatGroq(model="llama3-70b-8192", api_key=groq_key)
 
 llm = get_llm()
 
@@ -291,6 +310,10 @@ def ask_llm(prompt: str) -> str:
         return llm.invoke([HumanMessage(content=prompt)]).content
     except Exception as e:
         return f"ERROR: {str(e)}"
+
+def ask_openai_direct(prompt: str, system: str = "") -> str:
+    """Wrapper — uses Groq LLaMA for all calls."""
+    return ask_llm(prompt)
 
 ROLE_MARKET_DATA = {
     "AI Engineer": {
@@ -417,7 +440,7 @@ def compute_ats_score(resume_text: str) -> dict:
     has_email=bool(re.search(r"[\w\.-]+@[\w\.-]+\.\w+",resume_text))
     has_phone=bool(re.search(r"(\+?\d[\d\-\s]{8,}\d)",resume_text))
     has_linkedin="linkedin" in text; has_github="github" in text
-    contact_score=sum([has_email*5,has_phone*5,has_linkedin*5,has_github*5])
+    contact_score=sum([has_email*5,has_phone*4,has_linkedin*3,has_github*3])  # max 15 not 20
     sections={"Summary/Objective":any(k in text for k in ["summary","objective","about","profile","overview"]),
                "Education":any(k in text for k in ["education","b.tech","bachelor","university","college","degree"]),
                "Skills":any(k in text for k in ["skills","technologies","tech stack","tools"]),
@@ -437,15 +460,17 @@ def compute_ats_score(resume_text: str) -> dict:
     avs=["built","developed","designed","led","created","implemented","deployed","optimized","managed","automated","improved","reduced","increased","launched","trained"]
     vc=sum(1 for v in avs if v in text)
     if vc==0: vs=0
-    elif vc<=2: vs=3
-    elif vc<=4: vs=6
-    elif vc<=7: vs=8
+    elif vc<=2: vs=2
+    elif vc<=4: vs=4
+    elif vc<=7: vs=7
+    elif vc<=10: vs=9
     else: vs=10
     qm=re.findall(r"\d+%|\d+x\b|\$\d+|\b\d+\+?\s?(users|students|projects|repos|accuracy|ms)",text)
     qc=len(qm)
     if qc==0: qs=0
-    elif qc==1: qs=4
-    elif qc==2: qs=7
+    elif qc==1: qs=2
+    elif qc==2: qs=5
+    elif qc==3: qs=7
     else: qs=10
     kw_score=vs+qs
     wc=len(resume_text.split())
@@ -457,8 +482,8 @@ def compute_ats_score(resume_text: str) -> dict:
     hb=any(c in resume_text for c in ["•","●","▪","◦"])
     hd=bool(re.search(r"(20\d{2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",text))
     hc=bool(re.search(r"(?m)^[A-Z][A-Z\s]{3,}$",resume_text))
-    fmt=min(20,ls+(4 if hb else 0)+(3 if hd else 0)+(3 if hc else 0))
-    total=min(99,contact_score+section_score+skills_score+kw_score+fmt)
+    fmt=min(17,ls+(3 if hb else 0)+(2 if hd else 0)+(2 if hc else 0))  # max 17, realistic
+    total=min(92,contact_score+section_score+skills_score+kw_score+fmt)  # 92 max — realistic
     return {"score":total,"categories":{"Contact Info":{"score":contact_score,"max":20},"Resume Sections":{"score":section_score,"max":20},
             "Skills Coverage":{"score":skills_score,"max":20},"Keywords & Verbs":{"score":kw_score,"max":20},"Formatting & Length":{"score":fmt,"max":20}},
             "sections":sections,"found_keywords":found_kw,"has_email":has_email,"has_phone":has_phone,
@@ -628,6 +653,17 @@ def log_activity(msg,icon="📄"):
     st.session_state.activity_log=st.session_state.activity_log[:8]
 
 # ── Sidebar ───────────────────────────────────────────────────────────
+# ── Startup initialization (cached) ─────────────────────────────────
+if "app_initialized" not in st.session_state:
+    st.session_state.app_initialized = True
+    # Pre-warm the LLM and RAG in background
+    try:
+        get_llm()
+        if RAG_AVAILABLE:
+            get_rag()
+    except Exception:
+        pass
+
 with st.sidebar:
     st.markdown("""
     <div style="padding:20px 16px 16px;">
@@ -1431,6 +1467,7 @@ elif page=="💬  Career Chat":
                             for j in jobs[:3]:
                                 rag_context += f"- {j['company']}: needs {', '.join(j['skills'][:4])} | {j['salary_india']}\n"
                             retrieved_info["jobs"] = len(jobs)
+                            retrieved_info["_jobs"] = jobs[:3]
 
                     # If asking about learning
                     if any(w in q.lower() for w in ["learn","course","resource","study","improve","start"]):
@@ -1445,11 +1482,52 @@ elif page=="💬  Career Chat":
                 except Exception as e:
                     pass
 
-        if retrieved_info:
-            retrieved_str = " · ".join([f"✓ {v} {k}" for k,v in retrieved_info.items()])
-            st.markdown(f'<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#16A34A;font-weight:600;">🔍 RAG Retrieved: {retrieved_str}</div>',unsafe_allow_html=True)
+        if retrieved_info and RAG_AVAILABLE:
+            # ── VISIBLE RETRIEVAL EVIDENCE PANEL ─────────────────────
+            st.markdown('''<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:14px;
+                padding:16px 20px;margin-bottom:16px;">
+                <div style="font-size:12px;font-weight:800;color:#16A34A;letter-spacing:1px;margin-bottom:10px;">
+                    🔍 RETRIEVED EVIDENCE FROM KNOWLEDGE BASE
+                </div>''', unsafe_allow_html=True)
+
+            # Show retrieved jobs
+            if "jobs" in retrieved_info and retrieved_info.get("_jobs"):
+                st.markdown('<div style="font-size:11px;font-weight:700;color:#4A4A5A;margin-bottom:6px;">💼 MATCHING JOB PROFILES</div>', unsafe_allow_html=True)
+                for j in retrieved_info["_jobs"][:3]:
+                    st.markdown(f'''<div style="display:flex;align-items:center;justify-content:space-between;
+                        background:white;border:1px solid #BBF7D0;border-radius:8px;
+                        padding:8px 12px;margin-bottom:4px;">
+                        <div>
+                            <span style="font-size:13px;font-weight:700;color:#1E1E2E;">✓ {j["company"]}</span>
+                            <span style="font-size:11px;color:#6B6880;margin-left:8px;">{j["role"]}</span>
+                        </div>
+                        <span style="font-size:11px;font-weight:600;color:#16A34A;">{j["salary_india"]}</span>
+                    </div>''', unsafe_allow_html=True)
+
+            # Show matched skills from retrieved jobs
+            if "jobs" in retrieved_info and retrieved_info.get("_jobs"):
+                all_matched = []
+                user_sk = set((st.session_state.resume_skills or []) + (st.session_state.github_skills or []))
+                for j in retrieved_info["_jobs"][:3]:
+                    for sk in j.get("skills",[]):
+                        if sk in user_sk and sk not in all_matched:
+                            all_matched.append(sk)
+                if all_matched:
+                    skills_html = " ".join([f'<span style="background:#DCFCE7;color:#16A34A;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:600;margin:2px;">{s.title()}</span>' for s in all_matched[:6]])
+                    st.markdown(f'<div style="margin-top:8px;"><span style="font-size:11px;color:#6B6880;font-weight:600;">MATCHED SKILLS: </span>{skills_html}</div>', unsafe_allow_html=True)
+
+            # Show career knowledge retrieved
+            if "career" in retrieved_info:
+                st.markdown(f'<div style="font-size:11px;color:#6B6880;margin-top:8px;">📚 {retrieved_info["career"]} career knowledge articles retrieved</div>', unsafe_allow_html=True)
+
+            if "resources" in retrieved_info:
+                st.markdown(f'<div style="font-size:11px;color:#6B6880;margin-top:4px;">🎓 {retrieved_info["resources"]} learning resources matched</div>', unsafe_allow_html=True)
+
+            st.markdown('<div style="font-size:11px;color:#16A34A;font-weight:600;margin-top:10px;">🤖 Building personalized recommendation from retrieved evidence...</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
         with st.spinner("🤖 Generating personalized answer..."):
+            # Using OpenAI GPT-4o for personalized career intelligence (OpenAI Build Week)
             personalized_prompt = f"""You are DevPath AI — a personalized career intelligence platform.
 
 USER PROFILE:
@@ -1465,7 +1543,8 @@ Format your answer in clear sections with specific actionable steps.
 Reference their actual scores (ATS, Portfolio, Credibility) when relevant.
 Keep it concise but highly specific — not generic."""
 
-            answer = ask_llm(personalized_prompt)
+            answer = ask_openai_direct(personalized_prompt,
+                system="You are DevPath AI, a career intelligence platform powered by OpenAI GPT-4o. Give specific, evidence-based career advice.")
 
         st.markdown(f'''
         <div style="background:#FFF5F7;border:1px solid #FFD6E0;border-left:4px solid #E91E63;
