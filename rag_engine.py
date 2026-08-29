@@ -1,43 +1,35 @@
-# DevPath RAG Knowledge Engine
-# 4 Collections: Jobs, Interview, Learning, Career Intelligence
-# Uses ChromaDB in-memory + custom hash embedding (no model download needed)
+# DevPath RAG Engine — RAG-1 (with interviews dedup fix)
+# Real semantic embeddings (fastembed / BAAI/bge-small-en-v1.5)
+# Persistent ChromaDB. Single source of truth — app.py not wired in yet.
 
 import chromadb
 from chromadb import EmbeddingFunction, Documents, Embeddings
-import hashlib
-import numpy as np
+from fastembed import TextEmbedding
 import json
+import os
+import re
 
 # ══════════════════════════════════════════════════════════════════════
-#  CUSTOM EMBEDDING — works offline, no ONNX model download
+#  STEP 4 — REAL EMBEDDINGS (replaces DevPathEmbedding hash function)
 # ══════════════════════════════════════════════════════════════════════
-class DevPathEmbedding(EmbeddingFunction):
-    """Word-level + trigram hash embedding. Fast, offline, no dependencies."""
+class FastEmbedFunction(EmbeddingFunction):
+    """Real semantic embeddings via fastembed (ONNX, no PyTorch).
+    Model: BAAI/bge-small-en-v1.5 — locked decision, RAG-1."""
+
+    _model = None  # loaded once, shared across instances
+
     def __init__(self):
-        self.dim = 256
+        if FastEmbedFunction._model is None:
+            FastEmbedFunction._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 
     def __call__(self, input: Documents) -> Embeddings:
-        embeddings = []
-        for text in input:
-            vec = np.zeros(self.dim, dtype=float)
-            text_lower = str(text).lower()
-            # Word-level hashing
-            for w in text_lower.split():
-                h = int(hashlib.sha256(w.encode()).hexdigest(), 16) % self.dim
-                vec[h] += 1.0
-            # Trigram hashing for partial matches
-            for i in range(len(text_lower) - 2):
-                tg = text_lower[i:i+3]
-                h = int(hashlib.md5(tg.encode()).hexdigest(), 16) % self.dim
-                vec[h] += 0.3
-            norm = np.linalg.norm(vec)
-            if norm > 0:
-                vec = vec / norm
-            embeddings.append(vec.tolist())
-        return embeddings
+        texts = [str(t) for t in input]
+        vectors = list(FastEmbedFunction._model.embed(texts))
+        return [v.tolist() for v in vectors]
+
 
 # ══════════════════════════════════════════════════════════════════════
-#  KNOWLEDGE BASE
+#  KNOWLEDGE BASE (raw source data)
 # ══════════════════════════════════════════════════════════════════════
 JOB_INTELLIGENCE = [
     {"id":"j1","role":"AI Engineer","company":"Google","skills":["python","langchain","llm","fastapi","docker","gcp"],"salary_india":"₹15L–₹30L","demand":"Very High","text":"Google AI Engineer requires Python LangChain LLM integration FastAPI Docker GCP. Build AI-powered products at scale."},
@@ -129,87 +121,215 @@ CAREER_INTELLIGENCE = [
     {"id":"c15","topic":"Internship Strategy","text":"Apply to 50+ internships minimum. Personalize first 2 lines of each email. Follow up after 1 week. LinkedIn cold outreach works better than job portals for AI roles."},
 ]
 
+
+# ══════════════════════════════════════════════════════════════════════
+#  STEP 1 — CLEANING
+# ══════════════════════════════════════════════════════════════════════
+def clean_text(text: str) -> str:
+    """Normalize whitespace, strip control characters."""
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", str(text))
+    return text.strip()
+
+def clean_and_validate(records: list, required_fields: list, content_field: str = "text") -> list:
+    """Remove duplicates (by id and by exact-content match) and drop records
+    missing required fields.
+
+    `content_field` is whichever key holds the retrievable content for this
+    collection — NOT all collections use "text" (interviews use "question").
+    Passing the wrong content_field silently collapses every record to a
+    single "duplicate" of empty string, which is the bug this fixes.
+    """
+    seen_ids = set()
+    seen_texts = set()
+    cleaned = []
+    for r in records:
+        if not all(r.get(f) for f in required_fields):
+            continue  # missing required field — drop
+        rid = r.get("id")
+        if rid in seen_ids:
+            continue  # duplicate id — drop
+        text_key = clean_text(r.get(content_field, "")).lower()
+        if text_key and text_key in seen_texts:
+            continue  # duplicate content — drop (only when non-empty)
+        seen_ids.add(rid)
+        seen_texts.add(text_key)
+        r = dict(r)  # don't mutate original
+        if content_field in r:
+            r[content_field] = clean_text(r[content_field])
+        cleaned.append(r)
+    return cleaned
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  STEP 2 — STANDARDIZED METADATA
+#  Every document gets: source, category, type (+ category-specific fields)
+# ══════════════════════════════════════════════════════════════════════
+def build_job_metadata(j: dict) -> dict:
+    return {
+        "source": "DevPath Job Intelligence",
+        "category": "jobs",
+        "type": "job_requirement",
+        "role": j["role"],
+        "company": j["company"],
+        "skills": json.dumps(j["skills"]),
+        "salary_india": j["salary_india"],
+        "demand": j["demand"],
+    }
+
+def build_interview_metadata(q: dict) -> dict:
+    return {
+        "source": "DevPath Interview Intelligence",
+        "category": "interviews",
+        "type": "interview_question",
+        "role": q["role"],
+        "question": q["question"],
+        "difficulty": q["difficulty"],
+        "topic": q["topic"],
+        "hint": q["hint"],
+    }
+
+def build_learning_metadata(r: dict) -> dict:
+    return {
+        "source": "DevPath Learning Intelligence",
+        "category": "learning",
+        "type": "learning_resource",
+        "skill": r["skill"],
+        "resource": r["resource"],
+        "url": r["url"],
+        "difficulty": r["difficulty"],
+        "time": r["time"],
+    }
+
+def build_career_metadata(c: dict) -> dict:
+    return {
+        "source": "DevPath Career Intelligence",
+        "category": "career",
+        "type": "career_knowledge",
+        "topic": c["topic"],
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  RAG ENGINE
 # ══════════════════════════════════════════════════════════════════════
 class DevPathRAG:
-    def __init__(self):
+    def __init__(self, persist_path: str = "./devpath_chroma_db"):
+        self._persist_path = persist_path
         self._client = None
         self._ef = None
         self._initialized = False
         self._collections = {}
 
+    # ── STEP 5 — persistent client ──────────────────────────────────
     def _get_client(self):
         if self._client is None:
-            self._client = chromadb.Client()
-            self._ef = DevPathEmbedding()
+            os.makedirs(self._persist_path, exist_ok=True)
+            self._client = chromadb.PersistentClient(path=self._persist_path)
+            self._ef = FastEmbedFunction()
         return self._client, self._ef
 
-    def initialize(self):
-        if self._initialized:
+    def initialize(self, force_reseed: bool = False):
+        if self._initialized and not force_reseed:
             return
         client, ef = self._get_client()
 
+        # STEP 1 — clean + validate each collection's source data
+        # NOTE: content_field must match each dataset's actual content key
+        jobs = clean_and_validate(JOB_INTELLIGENCE, ["id", "text", "role", "company"], content_field="text")
+        interviews = clean_and_validate(INTERVIEW_INTELLIGENCE, ["id", "question", "role"], content_field="question")
+        learning = clean_and_validate(LEARNING_INTELLIGENCE, ["id", "text", "skill", "resource"], content_field="text")
+        career = clean_and_validate(CAREER_INTELLIGENCE, ["id", "text", "topic"], content_field="text")
+
+        # STEP 3 — retrieval units: each entry is already atomic, kept as-is
         collections_data = [
-            ("jobs",      [(j["id"],j["text"],{"role":j["role"],"company":j["company"],"skills":json.dumps(j["skills"]),"salary_india":j["salary_india"],"demand":j["demand"]}) for j in JOB_INTELLIGENCE]),
-            ("interviews",[(q["id"],f"{q['question']} {q['hint']}",{"role":q["role"],"question":q["question"],"difficulty":q["difficulty"],"topic":q["topic"],"hint":q["hint"]}) for q in INTERVIEW_INTELLIGENCE]),
-            ("learning",  [(r["id"],r["text"],{"skill":r["skill"],"resource":r["resource"],"url":r["url"],"difficulty":r["difficulty"],"time":r["time"]}) for r in LEARNING_INTELLIGENCE]),
-            ("career",    [(c["id"],c["text"],{"topic":c["topic"]}) for c in CAREER_INTELLIGENCE]),
+            ("jobs",       [(j["id"], j["text"], build_job_metadata(j)) for j in jobs]),
+            ("interviews", [(q["id"], f"{q['question']} {q['hint']}", build_interview_metadata(q)) for q in interviews]),
+            ("learning",   [(r["id"], r["text"], build_learning_metadata(r)) for r in learning]),
+            ("career",     [(c["id"], c["text"], build_career_metadata(c)) for c in career]),
         ]
 
         for name, data in collections_data:
+            if force_reseed:
+                try:
+                    client.delete_collection(name)
+                except Exception:
+                    pass
             try:
-                col = client.get_collection(name)
+                col = client.get_collection(name, embedding_function=ef)
             except Exception:
                 col = client.create_collection(name, embedding_function=ef)
-                ids=[d[0] for d in data]; docs=[d[1] for d in data]; metas=[d[2] for d in data]
-                col.add(ids=ids, documents=docs, metadatas=metas)
+                if data:
+                    col.add(
+                        ids=[d[0] for d in data],
+                        documents=[d[1] for d in data],
+                        metadatas=[d[2] for d in data],
+                    )
             self._collections[name] = col
 
         self._initialized = True
 
-    def retrieve_jobs(self, role: str, user_skills: list, n: int = 5) -> list:
+    # ── STEP 6 — retrieval, with inspectable relevance info ─────────
+    def retrieve(self, collection_name: str, query: str, n: int = 5) -> list:
+        """Generic retrieval — returns documents + metadata + distance
+        so results can be inspected, not just consumed blindly."""
         self.initialize()
-        query = f"{role} {' '.join(user_skills[:8])}"
-        col = self._collections["jobs"]
-        n = min(n, col.count())
+        col = self._collections[collection_name]
+        n = min(n, col.count()) or 1
         results = col.query(query_texts=[query], n_results=n)
+        out = []
+        docs = results["documents"][0]
+        metas = results["metadatas"][0]
+        dists = results["distances"][0]
+        for doc, meta, dist in zip(docs, metas, dists):
+            out.append({
+                "document": doc,
+                "metadata": meta,
+                "distance": round(dist, 4),
+                # NOTE: 1 - distance is only a rough proxy, not a calibrated
+                # similarity percentage — depends on Chroma's distance metric
+                # for this collection. Flagged for correction in RAG-2.
+                "similarity": round(max(0.0, 1 - dist), 4),
+            })
+        return out
+
+    def retrieve_jobs(self, role: str, user_skills: list, n: int = 5) -> list:
+        query = f"{role} {' '.join(user_skills[:8])}"
+        raw = self.retrieve("jobs", query, n)
         jobs = []
-        for i, meta in enumerate(results["metadatas"][0]):
-            dist = results["distances"][0][i]
+        for r in raw:
+            m = r["metadata"]
             jobs.append({
-                "company": meta["company"], "role": meta["role"],
-                "skills": json.loads(meta.get("skills","[]")),
-                "salary_india": meta["salary_india"], "demand": meta["demand"],
-                "relevance_score": max(10, round((1 - min(dist, 1.0)) * 100))
+                "company": m["company"], "role": m["role"],
+                "skills": json.loads(m.get("skills", "[]")),
+                "salary_india": m["salary_india"], "demand": m["demand"],
+                "relevance_score": round(r["similarity"] * 100),
             })
         return jobs
 
     def retrieve_interview_questions(self, role: str, n: int = 5) -> list:
-        self.initialize()
-        col = self._collections["interviews"]
-        n = min(n, col.count())
-        results = col.query(query_texts=[f"{role} interview technical questions"], n_results=n)
-        return [{"question":m["question"],"difficulty":m["difficulty"],"topic":m["topic"],"hint":m["hint"],"role":m["role"]} for m in results["metadatas"][0]]
+        raw = self.retrieve("interviews", f"{role} interview technical questions", n)
+        return [{"question": r["metadata"]["question"], "difficulty": r["metadata"]["difficulty"],
+                  "topic": r["metadata"]["topic"], "hint": r["metadata"]["hint"],
+                  "role": r["metadata"]["role"]} for r in raw]
 
     def retrieve_learning_resources(self, skills: list, n: int = 4) -> list:
-        self.initialize()
-        if not skills: return []
-        col = self._collections["learning"]
-        n = min(n, col.count())
-        results = col.query(query_texts=[" ".join(skills[:5])], n_results=n)
-        return [{"skill":m["skill"],"resource":m["resource"],"url":m["url"],"difficulty":m["difficulty"],"time":m["time"]} for m in results["metadatas"][0]]
+        if not skills:
+            return []
+        raw = self.retrieve("learning", " ".join(skills[:5]), n)
+        return [{"skill": r["metadata"]["skill"], "resource": r["metadata"]["resource"],
+                  "url": r["metadata"]["url"], "difficulty": r["metadata"]["difficulty"],
+                  "time": r["metadata"]["time"]} for r in raw]
 
     def retrieve_career_knowledge(self, query: str, n: int = 3) -> list:
-        self.initialize()
-        col = self._collections["career"]
-        n = min(n, col.count())
-        results = col.query(query_texts=[query], n_results=n)
-        return [{"topic":m["topic"],"content":doc} for m,doc in zip(results["metadatas"][0],results["documents"][0])]
+        raw = self.retrieve("career", query, n)
+        return [{"topic": r["metadata"]["topic"], "content": r["document"]} for r in raw]
 
     def get_stats(self) -> dict:
         self.initialize()
-        return {k: v.count() for k,v in self._collections.items()}
+        return {k: v.count() for k, v in self._collections.items()}
 
-# Singleton
+
+# Singleton — used by app.py once RAG-1 is verified and wired in (not yet)
 rag = DevPathRAG()

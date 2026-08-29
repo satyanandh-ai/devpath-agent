@@ -9,3 +9,4 @@ plotly
 reportlab
 chromadb
 numpy
+fastembed

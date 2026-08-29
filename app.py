@@ -23,166 +23,11 @@ from langchain_core.messages import HumanMessage
 load_dotenv()
 
 # ══════════════════════════════════════════════════════════════════════
-#  RAG ENGINE — Embedded directly (no separate file needed)
+#  RAG ENGINE — imported from rag_engine.py (single source of truth)
 # ══════════════════════════════════════════════════════════════════════
 try:
-    import chromadb
-    from chromadb import EmbeddingFunction, Documents, Embeddings
-    import hashlib
-    import numpy as np
-
-    class DevPathEmbedding(EmbeddingFunction):
-        def __init__(self):
-            self.dim = 256
-        def __call__(self, input: Documents) -> Embeddings:
-            embeddings = []
-            for text in input:
-                vec = np.zeros(self.dim, dtype=float)
-                text_lower = str(text).lower()
-                for w in text_lower.split():
-                    h = int(hashlib.sha256(w.encode()).hexdigest(), 16) % self.dim
-                    vec[h] += 1.0
-                for i in range(len(text_lower) - 2):
-                    tg = text_lower[i:i+3]
-                    h = int(hashlib.md5(tg.encode()).hexdigest(), 16) % self.dim
-                    vec[h] += 0.3
-                norm = np.linalg.norm(vec)
-                if norm > 0: vec = vec / norm
-                embeddings.append(vec.tolist())
-            return embeddings
-
-    _JOB_DATA = [
-        {"id":"j1","role":"AI Engineer","company":"Google","skills":["python","langchain","llm","fastapi","docker","gcp"],"salary_india":"₹15L–₹30L","demand":"Very High","text":"Google AI Engineer requires Python LangChain LLM FastAPI Docker GCP."},
-        {"id":"j2","role":"AI Engineer","company":"Microsoft","skills":["python","azure","docker","pytorch","fastapi","git"],"salary_india":"₹12L–₹25L","demand":"Very High","text":"Microsoft AI Engineer Python Azure Docker PyTorch FastAPI Git."},
-        {"id":"j3","role":"AI Engineer","company":"OpenAI","skills":["python","pytorch","llm","rag","langchain","kubernetes"],"salary_india":"₹20L–₹40L","demand":"Extremely High","text":"OpenAI AI Engineer Python PyTorch LLM RAG LangChain Kubernetes."},
-        {"id":"j4","role":"AI Engineer","company":"Anthropic","skills":["python","pytorch","llm","rag","aws","docker"],"salary_india":"₹18L–₹35L","demand":"Extremely High","text":"Anthropic AI Engineer Python PyTorch LLM safety RAG AWS Docker."},
-        {"id":"j5","role":"AI Engineer","company":"AI Startup","skills":["python","langchain","fastapi","docker","sql","git"],"salary_india":"₹8L–₹18L","demand":"High","text":"AI Engineer startup Python LangChain FastAPI Docker SQL Git."},
-        {"id":"j6","role":"AI Engineer Intern","company":"Startups","skills":["python","fastapi","langchain","git","sql"],"salary_india":"₹15K–₹40K/month","demand":"High","text":"AI Engineer Intern Python FastAPI LangChain Git SQL APIs."},
-        {"id":"j7","role":"ML Engineer","company":"Amazon","skills":["python","pytorch","tensorflow","aws","docker","mlflow"],"salary_india":"₹12L–₹22L","demand":"High","text":"Amazon ML Engineer Python PyTorch TensorFlow AWS Docker MLflow."},
-        {"id":"j8","role":"ML Engineer","company":"Meta","skills":["python","pytorch","spark","kubernetes","mlflow","git"],"salary_india":"₹15L–₹28L","demand":"High","text":"Meta ML Engineer Python PyTorch Spark Kubernetes MLflow Git."},
-        {"id":"j9","role":"MLOps Engineer","company":"Netflix","skills":["docker","kubernetes","python","mlflow","aws","ci/cd","airflow"],"salary_india":"₹14L–₹28L","demand":"Very High","text":"Netflix MLOps Docker Kubernetes Python MLflow AWS CICD Airflow."},
-        {"id":"j10","role":"MLOps Engineer","company":"Uber","skills":["kubernetes","docker","python","terraform","aws","mlflow","linux"],"salary_india":"₹12L–₹24L","demand":"Very High","text":"Uber MLOps Kubernetes Docker Python Terraform AWS MLflow Linux."},
-        {"id":"j11","role":"GenAI Engineer","company":"Cohere","skills":["python","langchain","rag","vector databases","fastapi","docker"],"salary_india":"₹16L–₹32L","demand":"Extremely High","text":"Cohere GenAI Python LangChain RAG Vector Databases FastAPI Docker."},
-        {"id":"j12","role":"GenAI Engineer","company":"Hugging Face","skills":["python","transformers","langchain","rag","pytorch","fastapi"],"salary_india":"₹14L–₹28L","demand":"Extremely High","text":"Hugging Face GenAI Python Transformers LangChain RAG PyTorch FastAPI."},
-        {"id":"j13","role":"GenAI Engineer","company":"AI Startup","skills":["python","langchain","langgraph","rag","prompt engineering","fastapi"],"salary_india":"₹10L–₹22L","demand":"Extremely High","text":"GenAI startup Python LangChain LangGraph RAG Prompt Engineering FastAPI."},
-        {"id":"j14","role":"Data Scientist","company":"McKinsey","skills":["python","sql","pandas","statistics","sklearn","tableau"],"salary_india":"₹10L–₹20L","demand":"High","text":"McKinsey Data Scientist Python SQL Pandas Statistics Scikit-learn Tableau."},
-        {"id":"j15","role":"Backend Engineer","company":"Razorpay","skills":["python","fastapi","postgresql","redis","docker","aws","git"],"salary_india":"₹8L–₹18L","demand":"High","text":"Razorpay Backend Python FastAPI PostgreSQL Redis Docker AWS Git."},
-        {"id":"j16","role":"Data Analyst","company":"Amazon","skills":["sql","python","tableau","pandas","statistics","excel"],"salary_india":"₹6L–₹12L","demand":"Medium-High","text":"Amazon Data Analyst SQL Python Tableau Pandas Statistics Excel."},
-    ]
-    _IQ_DATA = [
-        {"id":"i1","role":"AI Engineer","question":"Explain how RAG (Retrieval Augmented Generation) works and when you would use it.","difficulty":"Medium","topic":"LLM","hint":"Cover retrieval from vector DB context injection generation step use cases vs fine-tuning"},
-        {"id":"i2","role":"AI Engineer","question":"What is the difference between fine-tuning and prompt engineering?","difficulty":"Medium","topic":"LLM","hint":"Cost data requirements use cases latency speed of iteration"},
-        {"id":"i3","role":"AI Engineer","question":"How would you design a production-grade AI agent that handles errors gracefully?","difficulty":"Hard","topic":"System Design","hint":"Tool calling retry logic fallbacks monitoring logging circuit breakers"},
-        {"id":"i4","role":"AI Engineer","question":"Explain LangChain agent loop and the ReAct pattern.","difficulty":"Medium","topic":"LangChain","hint":"Reason Act cycle tool calling observation loop final answer"},
-        {"id":"i5","role":"AI Engineer","question":"What are main challenges in deploying LLM applications to production?","difficulty":"Hard","topic":"Production","hint":"Latency cost hallucinations rate limits prompt injection monitoring"},
-        {"id":"i6","role":"AI Engineer","question":"What is vector similarity search? Name 3 vector databases.","difficulty":"Easy","topic":"RAG","hint":"Cosine similarity Euclidean distance ChromaDB Pinecone Weaviate Qdrant"},
-        {"id":"i7","role":"AI Engineer","question":"Describe the difference between LangChain and LangGraph.","difficulty":"Medium","topic":"LangChain","hint":"LangGraph adds stateful multi-agent workflows cycles conditional edges state management"},
-        {"id":"i8","role":"ML Engineer","question":"Explain the bias-variance tradeoff with examples.","difficulty":"Medium","topic":"ML Theory","hint":"Underfitting vs overfitting model complexity regularization techniques"},
-        {"id":"i9","role":"ML Engineer","question":"How do you handle class imbalance in a classification problem?","difficulty":"Medium","topic":"ML Practice","hint":"SMOTE class weights precision-recall resampling strategies"},
-        {"id":"i10","role":"ML Engineer","question":"How would you deploy a PyTorch model to production?","difficulty":"Hard","topic":"MLOps","hint":"ONNX export FastAPI serving Docker Kubernetes monitoring AB testing"},
-        {"id":"i11","role":"MLOps Engineer","question":"What is the difference between Docker and Kubernetes?","difficulty":"Medium","topic":"DevOps","hint":"Container vs orchestration scaling service discovery load balancing"},
-        {"id":"i12","role":"MLOps Engineer","question":"How do you monitor a deployed ML model in production?","difficulty":"Hard","topic":"Monitoring","hint":"Data drift concept drift performance metrics alerting retraining triggers"},
-        {"id":"i13","role":"GenAI Engineer","question":"What is prompt injection and how do you defend against it?","difficulty":"Hard","topic":"LLM Security","hint":"Input validation system prompts output filtering sandboxing"},
-        {"id":"i14","role":"GenAI Engineer","question":"Explain the architecture of a multi-agent system using LangGraph.","difficulty":"Hard","topic":"Agents","hint":"Nodes edges state supervisor agent conditional routing tool calling"},
-        {"id":"i15","role":"Data Scientist","question":"Explain p-value and statistical significance.","difficulty":"Medium","topic":"Statistics","hint":"Null hypothesis Type I error alpha threshold 0.05 interpretation pitfalls"},
-        {"id":"i16","role":"Backend Engineer","question":"Explain REST API design best practices.","difficulty":"Medium","topic":"API Design","hint":"HTTP methods status codes versioning pagination authentication idempotency"},
-        {"id":"i17","role":"Backend Engineer","question":"How does FastAPI handle async requests?","difficulty":"Medium","topic":"FastAPI","hint":"async await event loop Starlette foundation uvicorn workers concurrency"},
-        {"id":"i18","role":"General","question":"Describe a project where you faced a technical challenge and how you solved it.","difficulty":"Medium","topic":"Behavioral","hint":"STAR method Situation Task Action Result with quantified impact"},
-        {"id":"i19","role":"General","question":"Walk me through your most impressive project end-to-end.","difficulty":"Medium","topic":"Behavioral","hint":"Problem tech choices challenges results what you would do differently"},
-        {"id":"i20","role":"General","question":"How do you keep up with AI/ML research and developments?","difficulty":"Easy","topic":"Behavioral","hint":"Papers conferences GitHub communities podcasts implementing from scratch"},
-    ]
-    _LR_DATA = [
-        {"id":"l1","skill":"docker","resource":"Docker Official Get Started","url":"https://docs.docker.com/get-started/","difficulty":"Beginner","time":"1 week","text":"Docker containerization basics build images run containers docker-compose networking volumes"},
-        {"id":"l2","skill":"aws","resource":"AWS Cloud Practitioner Free Tier","url":"https://aws.amazon.com/training/","difficulty":"Beginner","time":"2 weeks","text":"AWS fundamentals EC2 S3 Lambda IAM VPC RDS free tier cloud services"},
-        {"id":"l3","skill":"aws","resource":"Deploy FastAPI to AWS EC2","url":"https://aws.amazon.com/ec2/","difficulty":"Intermediate","time":"3 days","text":"Deploy Python FastAPI AWS EC2 configure nginx SSL domain production"},
-        {"id":"l4","skill":"kubernetes","resource":"Kubernetes Official Tutorial","url":"https://kubernetes.io/docs/tutorials/","difficulty":"Intermediate","time":"2 weeks","text":"Kubernetes pods deployments services ingress ConfigMaps Secrets scaling"},
-        {"id":"l5","skill":"langchain","resource":"LangChain Python Docs","url":"https://python.langchain.com","difficulty":"Beginner","time":"3 days","text":"LangChain chains agents tools memory prompts LLM integration callbacks"},
-        {"id":"l6","skill":"langgraph","resource":"LangGraph Official Tutorial","url":"https://langchain-ai.github.io/langgraph/","difficulty":"Intermediate","time":"1 week","text":"LangGraph stateful agents nodes edges supervisor pattern multi-agent"},
-        {"id":"l7","skill":"pytorch","resource":"PyTorch 60 Minute Blitz","url":"https://pytorch.org/tutorials/","difficulty":"Beginner","time":"1 week","text":"PyTorch tensors autograd neural networks training loop GPU deep learning"},
-        {"id":"l8","skill":"fastapi","resource":"FastAPI Official Documentation","url":"https://fastapi.tiangolo.com","difficulty":"Beginner","time":"3 days","text":"FastAPI routes Pydantic models dependency injection async OpenAPI"},
-        {"id":"l9","skill":"rag","resource":"Build Production RAG with LangChain","url":"https://python.langchain.com/docs/","difficulty":"Intermediate","time":"1 week","text":"RAG pipeline load documents chunk embed store vector DB retrieve generate"},
-        {"id":"l10","skill":"mlflow","resource":"MLflow Getting Started Guide","url":"https://mlflow.org/docs/","difficulty":"Beginner","time":"3 days","text":"MLflow experiment tracking log metrics model registry deployment"},
-        {"id":"l11","skill":"ci/cd","resource":"GitHub Actions Complete Guide","url":"https://docs.github.com/en/actions","difficulty":"Intermediate","time":"3 days","text":"GitHub Actions workflows automated testing deployment pipelines secrets"},
-        {"id":"l12","skill":"prompt engineering","resource":"Prompt Engineering Guide","url":"https://www.promptingguide.ai","difficulty":"Beginner","time":"2 days","text":"Prompt engineering chain of thought few-shot zero-shot system prompts"},
-        {"id":"l13","skill":"vector databases","resource":"ChromaDB Quickstart","url":"https://docs.trychroma.com","difficulty":"Beginner","time":"2 days","text":"ChromaDB vector database collections embeddings semantic search metadata"},
-        {"id":"l14","skill":"sql","resource":"SQLZoo Interactive Tutorial","url":"https://sqlzoo.net","difficulty":"Beginner","time":"1 week","text":"SQL SELECT JOIN GROUP BY subqueries window functions indexes PostgreSQL"},
-    ]
-    _CK_DATA = [
-        {"id":"c1","topic":"ATS Rules","text":"ATS systems scan for exact keyword matches. Include role-specific keywords from job description. Use standard headers Education Experience Skills Projects. Avoid tables columns images."},
-        {"id":"c2","topic":"ATS Rules","text":"ATS prefers PDF or DOCX. Simple bullet points standard fonts. 15-20 relevant technical keywords naturally placed. One page for under 2 years experience."},
-        {"id":"c3","topic":"Resume Tips","text":"Quantify achievements with numbers. Improved API response time by 40% beats improved performance. Recruiters spend 6-10 seconds on initial scan. Start bullets with action verbs."},
-        {"id":"c4","topic":"Resume Tips","text":"Tailor resume to each job description. Mirror language from JD. Include GitHub link LinkedIn profile email phone. Projects section crucial for freshers."},
-        {"id":"c5","topic":"GitHub Best Practices","text":"Every project needs README with description tech stack setup instructions screenshots demo link. 85% of recruiters check GitHub before interview. Pin 6 best repositories."},
-        {"id":"c6","topic":"Portfolio Tips","text":"Quality over quantity: 3-4 strong deployed projects beat 20 incomplete repos. Show full-stack capability. End-to-end AI projects: data collection preprocessing model training API deployment."},
-        {"id":"c7","topic":"Hiring Trends 2026","text":"Top skills in demand 2026: LangChain LangGraph RAG Vector Databases Agentic AI FastAPI Docker Kubernetes MLOps Prompt Engineering fine-tuning."},
-        {"id":"c8","topic":"Interview Prep","text":"For AI Engineer roles understand transformer architecture attention mechanism fine-tuning vs RAG LLM evaluation prompt injection production deployment challenges."},
-        {"id":"c9","topic":"Salary Negotiation","text":"Research salary ranges on Glassdoor LinkedIn Levels.fyi. India entry-level AI Engineer 6L-12L. With strong projects 10L-18L. Senior roles 20L-40L."},
-        {"id":"c10","topic":"Cold Outreach","text":"Cold email formula: specific compliment about their work brief intro with one achievement clear ask 15-minute call GitHub LinkedIn link. Under 150 words. Follow up after 1 week."},
-    ]
-
-    class _DevPathRAG:
-        def __init__(self):
-            self._client = None
-            self._ef = None
-            self._initialized = False
-            self._collections = {}
-
-        def _get_client(self):
-            if self._client is None:
-                self._client = chromadb.Client()
-                self._ef = DevPathEmbedding()
-            return self._client, self._ef
-
-        def initialize(self):
-            if self._initialized: return
-            client, ef = self._get_client()
-            datasets = [
-                ("jobs",      [(j["id"],j["text"],{"role":j["role"],"company":j["company"],"skills":json.dumps(j["skills"]),"salary_india":j["salary_india"],"demand":j["demand"]}) for j in _JOB_DATA]),
-                ("interviews",[(q["id"],f"{q['question']} {q['hint']}",{"role":q["role"],"question":q["question"],"difficulty":q["difficulty"],"topic":q["topic"],"hint":q["hint"]}) for q in _IQ_DATA]),
-                ("learning",  [(r["id"],r["text"],{"skill":r["skill"],"resource":r["resource"],"url":r["url"],"difficulty":r["difficulty"],"time":r["time"]}) for r in _LR_DATA]),
-                ("career",    [(c["id"],c["text"],{"topic":c["topic"]}) for c in _CK_DATA]),
-            ]
-            for name, data in datasets:
-                try:
-                    col = client.get_collection(name)
-                except Exception:
-                    col = client.create_collection(name, embedding_function=ef)
-                    col.add(ids=[d[0] for d in data], documents=[d[1] for d in data], metadatas=[d[2] for d in data])
-                self._collections[name] = col
-            self._initialized = True
-
-        def retrieve_jobs(self, role, user_skills, n=5):
-            self.initialize()
-            col = self._collections["jobs"]
-            results = col.query(query_texts=[f"{role} {' '.join(user_skills[:8])}"], n_results=min(n, col.count()))
-            return [{"company":m["company"],"role":m["role"],"skills":json.loads(m.get("skills","[]")),"salary_india":m["salary_india"],"demand":m["demand"],"relevance_score":max(10,round((1-min(d,1.0))*100))} for m,d in zip(results["metadatas"][0],results["distances"][0])]
-
-        def retrieve_interview_questions(self, role, n=5):
-            self.initialize()
-            col = self._collections["interviews"]
-            results = col.query(query_texts=[f"{role} interview technical questions"], n_results=min(n, col.count()))
-            return [{"question":m["question"],"difficulty":m["difficulty"],"topic":m["topic"],"hint":m["hint"],"role":m["role"]} for m in results["metadatas"][0]]
-
-        def retrieve_learning_resources(self, skills, n=4):
-            self.initialize()
-            if not skills: return []
-            col = self._collections["learning"]
-            results = col.query(query_texts=[" ".join(skills[:5])], n_results=min(n, col.count()))
-            return [{"skill":m["skill"],"resource":m["resource"],"url":m["url"],"difficulty":m["difficulty"],"time":m["time"]} for m in results["metadatas"][0]]
-
-        def retrieve_career_knowledge(self, query, n=3):
-            self.initialize()
-            col = self._collections["career"]
-            results = col.query(query_texts=[query], n_results=min(n, col.count()))
-            return [{"topic":m["topic"],"content":doc} for m,doc in zip(results["metadatas"][0],results["documents"][0])]
-
-        def get_stats(self):
-            self.initialize()
-            return {k: v.count() for k,v in self._collections.items()}
-
-    _rag_instance = _DevPathRAG()
+    from rag_engine import rag as _rag_instance
     RAG_AVAILABLE = True
-
 except Exception as _rag_err:
     RAG_AVAILABLE = False
     _rag_instance = None
@@ -489,6 +334,138 @@ def compute_ats_score(resume_text: str) -> dict:
             "sections":sections,"found_keywords":found_kw,"has_email":has_email,"has_phone":has_phone,
             "has_linkedin":has_linkedin,"has_github_link":has_github,"word_count":wc,"verb_count":vc,"quant_count":qc}
 
+# ══════════════════════════════════════════════════════════════════════
+#  PHASE 1 — Resume Intelligence: robust skill extraction
+# ══════════════════════════════════════════════════════════════════════
+
+# ── Canonical skill normalization ───────────────────────────────────────
+CANONICAL_SKILLS = {
+    "scikit-learn": {"sklearn", "scikit learn", "scikit-learn", "scikitlearn"},
+    "tensorflow": {"tensorflow", "tf"},
+    "pytorch": {"pytorch", "torch"},
+    "langchain": {"langchain", "lang chain"},
+    "langgraph": {"langgraph", "lang graph"},
+    "fastapi": {"fastapi", "fast api"},
+    "postgresql": {"postgresql", "postgres", "psql"},
+    "mongodb": {"mongodb", "mongo"},
+    "machine learning": {"machine learning", "ml"},
+    "deep learning": {"deep learning", "dl"},
+    "natural language processing": {"nlp", "natural language processing"},
+    "large language models": {"llm", "llms", "large language model", "large language models"},
+    "rag": {"rag", "retrieval augmented generation", "retrieval-augmented generation"},
+    "docker": {"docker", "containerization"},
+    "git": {"git", "git/github", "version control"},
+    "rest api": {"rest api", "rest apis", "restful api", "restful apis", "api development"},
+    "sql": {"sql", "structured query language"},
+    "prompt engineering": {"prompt engineering", "prompt design"},
+    "streamlit": {"streamlit"},
+    "chromadb": {"chromadb", "chroma"},
+    "aws": {"aws", "amazon web services"},
+    "gcp": {"gcp", "google cloud", "google cloud platform"},
+    "azure": {"azure", "microsoft azure"},
+    "pandas": {"pandas"},
+    "numpy": {"numpy"},
+}
+_REVERSE_CANON = {alias: canon for canon, aliases in CANONICAL_SKILLS.items() for alias in aliases}
+
+def normalize_skill(raw: str) -> str:
+    """Map a raw skill string to its canonical form. Falls back to cleaned original."""
+    s = raw.lower().strip()
+    s = re.sub(r"[\.\,;:()]+$", "", s)
+    s = re.sub(r"\s+", " ", s)
+    return _REVERSE_CANON.get(s, s)
+
+def normalize_skill_list(skills: list) -> list:
+    seen = set()
+    out = []
+    for s in skills:
+        n = normalize_skill(s)
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return sorted(out)
+
+# ── Robust LLM JSON extraction ──────────────────────────────────────────
+def strip_think(text: str) -> str:
+    """Remove <think>...</think> reasoning blocks emitted by reasoning models
+    (handles an unclosed trailing <think> too, in case output was truncated)."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL)
+    return text.strip()
+
+def extract_json_object(text: str) -> dict:
+    """Pull the first valid top-level JSON object out of a noisy LLM response.
+    Handles: <think> blocks, markdown fences, leading/trailing prose."""
+    cleaned = strip_think(text)
+    cleaned = re.sub(r"```(?:json)?", "", cleaned).strip()
+
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    start = cleaned.find("{")
+    if start == -1:
+        raise ValueError("No JSON object found in LLM response")
+    depth = 0
+    for i in range(start, len(cleaned)):
+        if cleaned[i] == "{":
+            depth += 1
+        elif cleaned[i] == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = cleaned[start:i + 1]
+                return json.loads(candidate)
+    raise ValueError("Unbalanced JSON object in LLM response")
+
+# ── Deterministic fallback ───────────────────────────────────────────────
+FALLBACK_SKILL_VOCAB = [
+    "python","java","javascript","typescript","c++","c#","react","node.js","sql","docker",
+    "kubernetes","aws","gcp","azure","machine learning","deep learning","tensorflow","pytorch",
+    "pandas","numpy","git","api","fastapi","flask","django","langchain","langgraph","llm","rag",
+    "nlp","data science","scikit-learn","sklearn","streamlit","mongodb","postgresql","chromadb",
+    "prompt engineering","agentic ai","rest api","pydantic","sqlite","openai","groq","html","css",
+    "async python","vector database","huggingface","transformers","jupyter"
+]
+
+def extract_skills_fallback(text: str) -> list:
+    """Deterministic keyword-match extraction. Used when the LLM call fails
+    or returns unparseable output, so one bad LLM response never zeroes out
+    the whole downstream pipeline."""
+    t = text.lower()
+    found = [kw for kw in FALLBACK_SKILL_VOCAB if kw in t]
+    return normalize_skill_list(found)
+
+def extract_skills_llm(text, source_label):
+    """Extract technical skills via LLM, with robust parsing, normalization,
+    and a deterministic fallback if the LLM call or parsing fails."""
+    raw = ask_llm(
+        f'Extract technical skills from this {source_label}. '
+        f'Return STRICT JSON only, no explanation, no reasoning, '
+        f'in this exact shape: {{"skills":["skill1","skill2"]}}\n\nText: {text[:3000]}'
+    )
+
+    if raw.startswith("ERROR"):
+        st.session_state["_skill_extract_warning"] = f"LLM call failed ({raw}); used fallback extraction."
+        return extract_skills_fallback(text)
+
+    try:
+        parsed = extract_json_object(raw)
+        skills = parsed.get("skills")
+        if not isinstance(skills, list):
+            raise ValueError(f"'skills' key is not a list: {type(skills)}")
+        cleaned = [s for s in skills if isinstance(s, str) and s.strip()]
+        if not cleaned:
+            raise ValueError("LLM returned an empty or invalid skills list")
+        st.session_state["_skill_extract_warning"] = None
+        return normalize_skill_list(cleaned)
+    except Exception as e:
+        st.session_state["_skill_extract_warning"] = (
+            f"Skill extraction JSON parse failed ({e}); used fallback extraction. "
+            f"Raw response (first 200 chars): {raw[:200]!r}"
+        )
+        return extract_skills_fallback(text)
+
 SKILL_SYNONYMS={"machine learning":{"ml","scikit-learn","sklearn","tensorflow","pytorch","keras","xgboost"},
     "deep learning":{"tensorflow","pytorch","keras","neural networks","cnn","rnn"},
     "nlp":{"natural language processing","spacy","nltk","transformers","huggingface","langchain"},
@@ -516,14 +493,6 @@ def compute_overlap(claimed,evidence):
     unverified=sorted(cs-set(verified)); extra=sorted(es-cs)
     score=round((len(verified)/len(cs))*100) if cs else 0
     return {"verified":verified,"unverified":unverified,"extra":extra,"score":score}
-
-def extract_skills_llm(text,source_label):
-    raw=ask_llm(f'Extract technical skills from this {source_label}. Return STRICT JSON only: {{"skills":["skill1","skill2"]}}\nText: {text[:3000]}')
-    try:
-        c=raw.strip()
-        if c.startswith("```"): c=c.strip("`").replace("json","",1).strip()
-        return sorted({s.lower().strip() for s in json.loads(c).get("skills",[]) if s.strip()})
-    except: return []
 
 def compute_market_readiness(user_skills,role_skills):
     us={s.lower().strip() for s in user_skills}
@@ -912,7 +881,13 @@ elif page=="📄  Resume Intelligence":
             st.error(text)
         else:
             st.session_state.resume_text=text
-            with st.spinner("Extracting skills..."): st.session_state.resume_skills=extract_skills_llm(text,"resume")
+            with st.spinner("Extracting skills..."):
+                st.session_state.resume_skills=extract_skills_llm(text,"resume")
+            if st.session_state.get("_skill_extract_warning"):
+                st.warning(
+                    "⚠️ AI skill extraction was unavailable, so DevPath used "
+                    "deterministic skill detection instead."
+                )
             with st.spinner("Computing ATS score..."):
                 ats=compute_ats_score(text)
                 st.session_state.ats_score=ats["score"]; st.session_state.ats_categories=ats["categories"]; st.session_state.ats_data=ats
@@ -1527,7 +1502,6 @@ elif page=="💬  Career Chat":
             st.markdown('</div>', unsafe_allow_html=True)
 
         with st.spinner("🤖 Generating personalized answer..."):
-            # Using OpenAI GPT-4o for personalized career intelligence (OpenAI Build Week)
             personalized_prompt = f"""You are DevPath AI — a personalized career intelligence platform.
 
 USER PROFILE:
