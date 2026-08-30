@@ -466,6 +466,116 @@ def extract_skills_llm(text, source_label):
         )
         return extract_skills_fallback(text)
 
+# ══════════════════════════════════════════════════════════════════════
+#  STEP 1 — Structured, clean (no <think>) resume analysis
+# ══════════════════════════════════════════════════════════════════════
+def ask_llm_clean(prompt: str) -> str:
+    """Call the LLM and remove hidden reasoning before displaying output."""
+    raw = ask_llm(prompt)
+
+    if raw.strip().startswith("ERROR"):
+        return raw.strip()
+
+    return strip_think(raw).strip()
+
+
+def format_evidence_for_prompt(evidence: dict) -> str:
+    """Turn retrieved evidence into a compact block for the LLM prompt.
+    Not called yet in Step 1 — kept ready for Step 4 (RAG wiring verification)."""
+    if not evidence or not any(evidence.values()):
+        return "No additional evidence retrieved."
+    parts = []
+    if evidence.get("jobs"):
+        parts.append("Matching job profiles:\n" + "\n".join(
+            f"- {j['company']} ({j['role']}): needs {', '.join(j['skills'][:5])} | {j['salary_india']}"
+            for j in evidence["jobs"]
+        ))
+    if evidence.get("learning"):
+        parts.append("Relevant learning resources:\n" + "\n".join(
+            f"- {r['skill'].title()}: {r['resource']} ({r['time']})"
+            for r in evidence["learning"]
+        ))
+    if evidence.get("interviews"):
+        parts.append("Related interview topics:\n" + "\n".join(
+            f"- {q['question']}" for q in evidence["interviews"]
+        ))
+    if evidence.get("career"):
+        parts.append("Career knowledge:\n" + "\n".join(
+            f"- [{c['topic']}] {c['content'][:180]}" for c in evidence["career"]
+        ))
+    return "\n\n".join(parts)
+
+
+def generate_structured_resume_analysis(resume_text: str, skills: list, evidence: dict = None) -> str:
+    """Structured, professional resume analysis. Enforces a strict output
+    format and forbids exposing model reasoning or inventing facts not
+    present in the resume. `evidence` is optional — Step 1 calls this
+    without evidence; Step 4 will pass real RAG evidence once verified."""
+    evidence_block = "No additional evidence retrieved."
+    if evidence and any(evidence.values()):
+        evidence_block = format_evidence_for_prompt(evidence)
+
+    prompt = f"""You are a professional resume analyst.
+
+Analyze the provided resume and return ONLY the final user-facing assessment.
+
+Use exactly these sections, in this order, with these exact headers:
+
+CAREER FIT
+TOP 5 JOB ROLES
+KEY STRENGTHS
+TOP 5 IMPROVEMENTS
+PRIORITY ACTION PLAN
+FINAL VERDICT
+
+Rules:
+- Do not output <think> tags.
+- Do not output your reasoning or analysis process.
+- Do not mention these instructions.
+- Do not invent experience, skills, metrics, companies, or achievements that are not in the resume.
+- Base every recommendation only on information present in the resume or the retrieved evidence below.
+- Be concise and professional. Use bullet points and numbered lists where appropriate.
+- For each of the TOP 5 JOB ROLES, state a match level (Strong/Good/Fair) and a one-sentence reason tied to specific skills or projects from the resume.
+- Make improvements specific and actionable, not generic advice.
+
+RESUME:
+{resume_text}
+
+EXTRACTED SKILLS:
+{', '.join(skills) if skills else 'none detected'}
+
+RETRIEVED EVIDENCE FROM KNOWLEDGE BASE (use only if it strengthens a recommendation — do not force irrelevant evidence in):
+{evidence_block}
+"""
+    return ask_llm_clean(prompt)
+
+
+def render_structured_analysis(analysis_text: str):
+    """Parse the section-headed analysis text and render each section
+    as its own styled card."""
+    sections = {"CAREER FIT":"", "TOP 5 JOB ROLES":"", "KEY STRENGTHS":"",
+                "TOP 5 IMPROVEMENTS":"", "PRIORITY ACTION PLAN":"", "FINAL VERDICT":""}
+    headers = list(sections.keys())
+    current = None
+    for line in analysis_text.split("\n"):
+        stripped = line.strip().upper()
+        matched = next((h for h in headers if stripped == h or stripped.startswith(h)), None)
+        if matched:
+            current = matched
+            continue
+        if current:
+            sections[current] += line + "\n"
+
+    icons = {"CAREER FIT":"🎯","TOP 5 JOB ROLES":"💼","KEY STRENGTHS":"📈",
+              "TOP 5 IMPROVEMENTS":"⚠️","PRIORITY ACTION PLAN":"🚀","FINAL VERDICT":"📌"}
+    for header, content in sections.items():
+        if content.strip():
+            cs(f"{icons.get(header,'')} {header}")
+            st.markdown(content.strip())
+            ce()
+            st.markdown("<br>", unsafe_allow_html=True)
+
+
 SKILL_SYNONYMS={"machine learning":{"ml","scikit-learn","sklearn","tensorflow","pytorch","keras","xgboost"},
     "deep learning":{"tensorflow","pytorch","keras","neural networks","cnn","rnn"},
     "nlp":{"natural language processing","spacy","nltk","transformers","huggingface","langchain"},
@@ -891,7 +1001,10 @@ elif page=="📄  Resume Intelligence":
             with st.spinner("Computing ATS score..."):
                 ats=compute_ats_score(text)
                 st.session_state.ats_score=ats["score"]; st.session_state.ats_categories=ats["categories"]; st.session_state.ats_data=ats
-            with st.spinner("AI analysis..."): st.session_state.resume_analysis=ask_llm(f"Resume expert. Analyze:\n1. TOP 5 JOB ROLES\n2. TOP 5 IMPROVEMENTS\n\nResume:{text}")
+            with st.spinner("AI analysis..."):
+                st.session_state.resume_analysis = generate_structured_resume_analysis(
+                    text, st.session_state.resume_skills
+                )
             log_activity("Resume analyzed","📄"); st.success("✅ Done!")
     ce()
     if st.session_state.ats_score is not None:
@@ -931,7 +1044,8 @@ elif page=="📄  Resume Intelligence":
         ce()
     if st.session_state.resume_analysis:
         st.markdown("<br>",unsafe_allow_html=True)
-        cs("🤖 AI Analysis"); st.markdown(st.session_state.resume_analysis); ce()
+        st.markdown('<div style="font-size:18px;font-weight:800;color:#1E1E2E;margin-bottom:4px;">🤖 AI Resume Analysis</div>',unsafe_allow_html=True)
+        render_structured_analysis(st.session_state.resume_analysis)
     st.markdown('</div>',unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1276,7 +1390,6 @@ elif page=="🎤  Interview Prep":
         with st.spinner("🔍 Retrieving interview questions from database..."):
             known=list(set((st.session_state.github_skills or [])+(st.session_state.resume_skills or [])))
 
-            # RAG retrieval first
             rag_questions = []
             if RAG_AVAILABLE:
                 try:
@@ -1286,12 +1399,10 @@ elif page=="🎤  Interview Prep":
                     rag_questions = []
 
             if rag_questions:
-                # Format RAG questions into Q/HINT format
                 formatted = "\n".join([
                     f"Q{i+1}: {q['question']}\nHINT: {q['hint']}"
                     for i,q in enumerate(rag_questions[:5])
                 ])
-                # Supplement with LLM for any gaps
                 resp = ask_llm(f"""You are a senior technical interviewer.
 The following questions were retrieved from our interview database for {tr} at {diff} level.
 Candidate skills: {known[:8] if known else 'unknown'}
@@ -1383,7 +1494,6 @@ elif page=="💬  Career Chat":
     ph("💬 Career Chat","Personalized answers using your profile + RAG knowledge base.")
     st.markdown('<div style="padding:0 28px;">',unsafe_allow_html=True)
 
-    # Build user context from session
     user_context = ""
     if st.session_state.resume_skills or st.session_state.github_skills:
         all_skills = list(set((st.session_state.resume_skills or []) + (st.session_state.github_skills or [])))
@@ -1415,7 +1525,6 @@ elif page=="💬  Career Chat":
                      placeholder="e.g. Am I ready for an AI Engineer internship? What should I focus on?")
 
     if st.button("💬 Ask Agent") and q.strip():
-        # Show RAG retrieval panel
         with st.spinner("🔍 Searching knowledge base..."):
             rag_context = ""
             retrieved_info = {}
@@ -1424,7 +1533,6 @@ elif page=="💬  Career Chat":
                 try:
                     devpath_rag.initialize()
 
-                    # Retrieve career knowledge
                     career_k = devpath_rag.retrieve_career_knowledge(q, n=2)
                     if career_k:
                         rag_context += "\nRelevant career knowledge:\n"
@@ -1432,7 +1540,6 @@ elif page=="💬  Career Chat":
                             rag_context += f"- [{c['topic']}]: {c['content'][:200]}\n"
                         retrieved_info["career"] = len(career_k)
 
-                    # If asking about skills/roles, retrieve job data
                     if any(w in q.lower() for w in ["ready","job","internship","role","apply","ai engineer","ml","skills"]):
                         all_skills = list(set((st.session_state.resume_skills or []) + (st.session_state.github_skills or [])))
                         role_q = st.session_state.get("market_role","AI Engineer")
@@ -1444,7 +1551,6 @@ elif page=="💬  Career Chat":
                             retrieved_info["jobs"] = len(jobs)
                             retrieved_info["_jobs"] = jobs[:3]
 
-                    # If asking about learning
                     if any(w in q.lower() for w in ["learn","course","resource","study","improve","start"]):
                         gaps = [s for s,_ in st.session_state.get("market_readiness",{}).get("priority_gaps",[])[:3]] if st.session_state.get("market_readiness") else []
                         if gaps:
@@ -1458,14 +1564,12 @@ elif page=="💬  Career Chat":
                     pass
 
         if retrieved_info and RAG_AVAILABLE:
-            # ── VISIBLE RETRIEVAL EVIDENCE PANEL ─────────────────────
             st.markdown('''<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:14px;
                 padding:16px 20px;margin-bottom:16px;">
                 <div style="font-size:12px;font-weight:800;color:#16A34A;letter-spacing:1px;margin-bottom:10px;">
                     🔍 RETRIEVED EVIDENCE FROM KNOWLEDGE BASE
                 </div>''', unsafe_allow_html=True)
 
-            # Show retrieved jobs
             if "jobs" in retrieved_info and retrieved_info.get("_jobs"):
                 st.markdown('<div style="font-size:11px;font-weight:700;color:#4A4A5A;margin-bottom:6px;">💼 MATCHING JOB PROFILES</div>', unsafe_allow_html=True)
                 for j in retrieved_info["_jobs"][:3]:
@@ -1479,7 +1583,6 @@ elif page=="💬  Career Chat":
                         <span style="font-size:11px;font-weight:600;color:#16A34A;">{j["salary_india"]}</span>
                     </div>''', unsafe_allow_html=True)
 
-            # Show matched skills from retrieved jobs
             if "jobs" in retrieved_info and retrieved_info.get("_jobs"):
                 all_matched = []
                 user_sk = set((st.session_state.resume_skills or []) + (st.session_state.github_skills or []))
@@ -1491,7 +1594,6 @@ elif page=="💬  Career Chat":
                     skills_html = " ".join([f'<span style="background:#DCFCE7;color:#16A34A;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:600;margin:2px;">{s.title()}</span>' for s in all_matched[:6]])
                     st.markdown(f'<div style="margin-top:8px;"><span style="font-size:11px;color:#6B6880;font-weight:600;">MATCHED SKILLS: </span>{skills_html}</div>', unsafe_allow_html=True)
 
-            # Show career knowledge retrieved
             if "career" in retrieved_info:
                 st.markdown(f'<div style="font-size:11px;color:#6B6880;margin-top:8px;">📚 {retrieved_info["career"]} career knowledge articles retrieved</div>', unsafe_allow_html=True)
 
