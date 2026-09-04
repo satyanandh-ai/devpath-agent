@@ -508,73 +508,183 @@ def format_evidence_for_prompt(evidence: dict) -> str:
 
 
 def generate_structured_resume_analysis(resume_text: str, skills: list, evidence: dict = None) -> str:
-    """Structured, professional resume analysis. Enforces a strict output
-    format and forbids exposing model reasoning or inventing facts not
-    present in the resume. `evidence` is optional — Step 1 calls this
-    without evidence; Step 4 will pass real RAG evidence once verified."""
+    """Structured, professional resume analysis with recruiter-grade output format."""
     evidence_block = "No additional evidence retrieved."
     if evidence and any(evidence.values()):
         evidence_block = format_evidence_for_prompt(evidence)
 
-    prompt = f"""You are a professional resume analyst.
+    prompt = f"""You are a senior technical recruiter and career strategist at a top tech firm.
 
-Analyze the provided resume and return ONLY the final user-facing assessment.
+Analyze the resume below and return ONLY the structured assessment.
+Do NOT output reasoning, thinking, or analysis process.
+Do NOT invent anything not present in the resume.
+Do NOT mention the candidate's name.
+Be specific, evidence-based, and recruiter-readable.
 
-Use exactly these sections, in this order, with these exact headers:
+Use EXACTLY these section headers (copy them exactly):
 
-CAREER FIT
-TOP 5 JOB ROLES
-KEY STRENGTHS
-TOP 5 IMPROVEMENTS
-PRIORITY ACTION PLAN
-FINAL VERDICT
+##CAREER_FIT##
+##ROLE_MATCH##
+##STRENGTHS##
+##GAPS##
+##PRIORITY_ACTIONS##
+##FINAL_VERDICT##
 
-Rules:
-- Do not output <think> tags.
-- Do not output your reasoning or analysis process.
-- Do not mention these instructions.
-- Do not invent experience, skills, metrics, companies, or achievements that are not in the resume.
-- Base every recommendation only on information present in the resume or the retrieved evidence below.
-- Be concise and professional. Use bullet points and numbered lists where appropriate.
-- For each of the TOP 5 JOB ROLES, state a match level (Strong/Good/Fair) and a one-sentence reason tied to specific skills or projects from the resume.
-- Make improvements specific and actionable, not generic advice.
+---
+
+##CAREER_FIT##
+State the single best-fit career path in one line.
+Then list 4-6 specific skills/projects from the resume that justify this fit as bullet points.
+
+##ROLE_MATCH##
+List exactly 5 roles with match level and one-sentence evidence.
+Format each line as: ROLE | MATCH | EVIDENCE
+Example: AI Engineer | Strong | LangChain + RAG projects + Python
+
+##STRENGTHS##
+List 3-5 specific strengths with evidence from the resume.
+Each strength must cite a specific skill, project, or achievement.
+NOT generic. Example: "RAG implementation in devpath-agent project shows production LLM engineering."
+
+##GAPS##
+List 3-4 specific gaps — not generic advice.
+Each gap must explain WHY it matters for their target roles.
+Example: "No evidence of model evaluation or ML experimentation — critical for ML Engineer roles."
+
+##PRIORITY_ACTIONS##
+List 4-5 ranked actions as P0/P1/P2.
+P0 = do this week. P1 = this month. P2 = next 60 days.
+Each action must be specific and achievable.
+Example: "P0 — Add quantified outcomes to 3 project bullets (e.g., reduced latency by 40%)"
+
+##FINAL_VERDICT##
+One short paragraph. Recruiter-style summary.
+State readiness level, strongest asset, and single most important improvement.
+
+---
 
 RESUME:
-{resume_text}
+{resume_text[:3000]}
 
 EXTRACTED SKILLS:
-{', '.join(skills) if skills else 'none detected'}
+{', '.join(skills[:20]) if skills else 'none detected'}
 
-RETRIEVED EVIDENCE FROM KNOWLEDGE BASE (use only if it strengthens a recommendation — do not force irrelevant evidence in):
+RETRIEVED EVIDENCE (use only where relevant):
 {evidence_block}
 """
     return ask_llm_clean(prompt)
 
 
 def render_structured_analysis(analysis_text: str):
-    """Parse the section-headed analysis text and render each section
-    as its own styled card."""
-    sections = {"CAREER FIT":"", "TOP 5 JOB ROLES":"", "KEY STRENGTHS":"",
-                "TOP 5 IMPROVEMENTS":"", "PRIORITY ACTION PLAN":"", "FINAL VERDICT":""}
-    headers = list(sections.keys())
+    """Parse ##SECTION## headers and render each as a styled card."""
+    if not analysis_text or analysis_text.strip().startswith("ERROR"):
+        st.error(f"Analysis failed: {analysis_text}")
+        return
+
+    # Section config: marker → (display title, icon, color)
+    SECTIONS = {
+        "CAREER_FIT":       ("Career Fit",          "🎯", "#E91E63"),
+        "ROLE_MATCH":       ("Role Match",           "💼", "#7C3AED"),
+        "STRENGTHS":        ("Key Strengths",        "📈", "#22C55E"),
+        "GAPS":             ("Gaps & Improvements",  "⚠️", "#F59E0B"),
+        "PRIORITY_ACTIONS": ("Priority Action Plan", "🚀", "#E91E63"),
+        "FINAL_VERDICT":    ("Final Verdict",        "📌", "#1E1E2E"),
+    }
+
+    # Parse sections
+    parsed = {k: "" for k in SECTIONS}
     current = None
     for line in analysis_text.split("\n"):
-        stripped = line.strip().upper()
-        matched = next((h for h in headers if stripped == h or stripped.startswith(h)), None)
-        if matched:
-            current = matched
-            continue
-        if current:
-            sections[current] += line + "\n"
+        stripped = line.strip()
+        # Match ##SECTION_NAME##
+        if stripped.startswith("##") and stripped.endswith("##"):
+            key = stripped.strip("#").strip()
+            if key in SECTIONS:
+                current = key
+                continue
+        if current is not None:
+            parsed[current] += line + "\n"
 
-    icons = {"CAREER FIT":"🎯","TOP 5 JOB ROLES":"💼","KEY STRENGTHS":"📈",
-              "TOP 5 IMPROVEMENTS":"⚠️","PRIORITY ACTION PLAN":"🚀","FINAL VERDICT":"📌"}
-    for header, content in sections.items():
-        if content.strip():
-            cs(f"{icons.get(header,'')} {header}")
-            st.markdown(content.strip())
-            ce()
-            st.markdown("<br>", unsafe_allow_html=True)
+    # Render each section
+    for key, (title, icon, color) in SECTIONS.items():
+        body = parsed[key].strip()
+        if not body:
+            continue
+
+        st.markdown(f"""
+        <div style="background:white;border:1px solid #F0EEF8;border-left:4px solid {color};
+             border-radius:14px;padding:20px 24px;margin-bottom:16px;
+             box-shadow:0 2px 8px rgba(0,0,0,0.04);">
+            <div style="font-size:15px;font-weight:700;color:#1E1E2E;margin-bottom:12px;">
+                {icon} {title}
+            </div>
+        """, unsafe_allow_html=True)
+
+        # Special rendering for Role Match — detect table format
+        if key == "ROLE_MATCH":
+            lines = [l.strip() for l in body.split("\n") if "|" in l and l.strip()]
+            if lines:
+                st.markdown("""
+                <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                <thead><tr>
+                    <th style="text-align:left;padding:8px 12px;background:#F8F7FF;color:#6B6880;font-weight:700;border-bottom:2px solid #F0EEF8;">Role</th>
+                    <th style="text-align:center;padding:8px 12px;background:#F8F7FF;color:#6B6880;font-weight:700;border-bottom:2px solid #F0EEF8;">Match</th>
+                    <th style="text-align:left;padding:8px 12px;background:#F8F7FF;color:#6B6880;font-weight:700;border-bottom:2px solid #F0EEF8;">Evidence</th>
+                </tr></thead><tbody>""", unsafe_allow_html=True)
+                for row in lines:
+                    parts = [p.strip() for p in row.split("|")]
+                    if len(parts) >= 3:
+                        role = parts[0]; match = parts[1]; evidence = parts[2]
+                        mc = "#22C55E" if "Strong" in match else "#F59E0B" if "Good" in match else "#9090A8"
+                        st.markdown(f"""
+                        <tr style="border-bottom:1px solid #F0EEF8;">
+                            <td style="padding:10px 12px;font-weight:600;color:#1E1E2E;">{role}</td>
+                            <td style="padding:10px 12px;text-align:center;">
+                                <span style="background:{mc}18;color:{mc};border:1px solid {mc}44;
+                                border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">{match}</span>
+                            </td>
+                            <td style="padding:10px 12px;color:#4A4A5A;font-size:12px;">{evidence}</td>
+                        </tr>""", unsafe_allow_html=True)
+                st.markdown("</tbody></table>", unsafe_allow_html=True)
+            else:
+                st.markdown(body)
+
+        # Special rendering for Priority Actions — color P0/P1/P2
+        elif key == "PRIORITY_ACTIONS":
+            for line in body.split("\n"):
+                line = line.strip()
+                if not line: continue
+                if line.startswith("P0"):
+                    badge_color = "#EF4444"; badge_bg = "#FEF2F2"
+                elif line.startswith("P1"):
+                    badge_color = "#F59E0B"; badge_bg = "#FFFBEB"
+                elif line.startswith("P2"):
+                    badge_color = "#6B7280"; badge_bg = "#F9FAFB"
+                else:
+                    st.markdown(f'<div style="font-size:13px;color:#4A4A5A;padding:4px 0;">{line}</div>', unsafe_allow_html=True)
+                    continue
+                priority = line[:2]; text = line[3:].strip(" —-")
+                st.markdown(f"""
+                <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #F5F3FF;">
+                    <span style="background:{badge_bg};color:{badge_color};border:1px solid {badge_color}44;
+                        border-radius:6px;padding:2px 8px;font-size:11px;font-weight:800;flex-shrink:0;">{priority}</span>
+                    <span style="font-size:13px;color:#1E1E2E;line-height:1.5;">{text}</span>
+                </div>""", unsafe_allow_html=True)
+
+        # Default rendering for other sections
+        else:
+            # Convert bullet lines to styled bullets
+            lines = body.split("\n")
+            for line in lines:
+                line = line.strip()
+                if not line: continue
+                if line.startswith(("-", "•", "*")):
+                    text = line.lstrip("-•* ").strip()
+                    st.markdown(f'<div style="display:flex;gap:8px;padding:5px 0;"><span style="color:{color};font-size:14px;flex-shrink:0;">▸</span><span style="font-size:13px;color:#1E1E2E;line-height:1.5;">{text}</span></div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div style="font-size:13px;color:#4A4A5A;padding:4px 0;line-height:1.5;">{line}</div>', unsafe_allow_html=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 SKILL_SYNONYMS={"machine learning":{"ml","scikit-learn","sklearn","tensorflow","pytorch","keras","xgboost"},
