@@ -215,7 +215,7 @@ def build_career_metadata(c: dict) -> dict:
 #  RAG ENGINE
 # ══════════════════════════════════════════════════════════════════════
 class DevPathRAG:
-    def __init__(self, persist_path: str = "./devpath_chroma_db"):
+    def __init__(self, persist_path: str = "/tmp/devpath_chroma_db"):
         self._persist_path = persist_path
         self._client = None
         self._ef = None

@@ -146,7 +146,8 @@ def get_llm():
     if not groq_key:
         st.error("❌ GROQ_API_KEY not found! Add it in Streamlit Secrets.")
         st.stop()
-    return ChatGroq(model="qwen/qwen3.6-27b", api_key=groq_key)
+    # openai/gpt-oss-20b — verified current Groq production model (Sept 2026)
+    return ChatGroq(model="openai/gpt-oss-20b", api_key=groq_key)
 
 llm = get_llm()
 
@@ -1001,9 +1002,36 @@ elif page=="📄  Resume Intelligence":
             with st.spinner("Computing ATS score..."):
                 ats=compute_ats_score(text)
                 st.session_state.ats_score=ats["score"]; st.session_state.ats_categories=ats["categories"]; st.session_state.ats_data=ats
-            with st.spinner("AI analysis..."):
+            with st.spinner("🔍 Retrieving evidence from knowledge base..."):
+                rag_evidence = {"jobs":[], "learning":[], "career":[]}
+                if RAG_AVAILABLE:
+                    try:
+                        devpath_rag.initialize()
+                        # Retrieve matching jobs
+                        rag_evidence["jobs"] = devpath_rag.retrieve_jobs(
+                            "AI Engineer", st.session_state.resume_skills or [], n=3
+                        )
+                        # Retrieve learning for skill gaps
+                        rag_evidence["learning"] = devpath_rag.retrieve_learning_resources(
+                            st.session_state.resume_skills or [], n=3
+                        )
+                        # Retrieve career knowledge
+                        rag_evidence["career"] = devpath_rag.retrieve_career_knowledge(
+                            "resume tips ATS keywords improvements", n=2
+                        )
+                    except Exception:
+                        pass
+                if any(rag_evidence.values()):
+                    job_names = [j["company"] for j in rag_evidence["jobs"][:3]]
+                    st.markdown(f'''<div style="background:#F0FDF4;border:1px solid #BBF7D0;
+                        border-radius:10px;padding:10px 16px;margin-bottom:8px;">
+                        <span style="font-size:12px;font-weight:700;color:#16A34A;">
+                        🔍 RAG Retrieved: {len(rag_evidence["jobs"])} jobs · {len(rag_evidence["learning"])} resources · {len(rag_evidence["career"])} career articles
+                        {"· Matching: " + ", ".join(job_names) if job_names else ""}
+                        </span></div>''', unsafe_allow_html=True)
+            with st.spinner("🤖 Generating AI analysis..."):
                 st.session_state.resume_analysis = generate_structured_resume_analysis(
-                    text, st.session_state.resume_skills
+                    text, st.session_state.resume_skills, evidence=rag_evidence
                 )
             log_activity("Resume analyzed","📄"); st.success("✅ Done!")
     ce()
