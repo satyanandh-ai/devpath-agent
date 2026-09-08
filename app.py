@@ -23,6 +23,573 @@ from langchain_core.messages import HumanMessage
 load_dotenv()
 
 # ══════════════════════════════════════════════════════════════════════
+#  SKILL EVIDENCE ENGINE (embedded)
+# ══════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
+#  SKILL EVIDENCE ENGINE — Central source of truth for DevPath
+#  ONE canonical taxonomy. Every module reads from this.
+#  Fix 1: No duplicates. Fix 2: git ≠ github. Fix 4: 5 evidence levels.
+#  Fix 5: Traceable evidence. Fix 6: Single canonical taxonomy.
+# ══════════════════════════════════════════════════════════════════════
+
+import requests
+import re
+from datetime import datetime
+
+# ══════════════════════════════════════════════════════════════════════
+#  THE ONE CANONICAL SKILL TAXONOMY — DevPath single source of truth
+#
+#  Rules enforced:
+#  1. git ≠ github (separate skills, separate evidence)
+#  2. javascript ≠ typescript (related but NOT the same)
+#  3. java ≠ spring (framework ≠ language)
+#  4. Each skill maps only to its direct aliases — no overreach
+#  5. This is the ONLY definition — no other taxonomy exists in this file
+# ══════════════════════════════════════════════════════════════════════
+SKILL_SYNONYMS = {
+    # ── Programming Languages ─────────────────────────────────────────
+    "python":               {"python3", "python2"},
+    "javascript":           {"javascript", "js", "node.js", "nodejs"},
+    "typescript":           {"typescript", "ts"},           # separate from javascript
+    "java":                 {"java"},                        # separate from spring
+    "spring":               {"spring", "springboot", "spring boot"},
+    "sql":                  {"sql", "structured query language"},
+    "mysql":                {"mysql"},
+    "postgresql":           {"postgresql", "postgres", "psql"},
+    "sqlite":               {"sqlite"},
+
+    # ── AI / ML ───────────────────────────────────────────────────────
+    "machine learning":     {"machine learning", "ml"},
+    "deep learning":        {"deep learning", "dl", "neural network"},
+    "pytorch":              {"pytorch", "torch"},
+    "tensorflow":           {"tensorflow", "keras", "tf"},
+    "scikit-learn":         {"scikit-learn", "sklearn", "scikit learn"},
+    "nlp":                  {"natural language processing", "nlp", "spacy", "nltk"},
+    "computer vision":      {"computer vision", "opencv", "cv2", "image recognition"},
+
+    # ── LLM / GenAI ───────────────────────────────────────────────────
+    "llm":                  {"large language model", "llm", "llms"},
+    "langchain":            {"langchain"},
+    "langgraph":            {"langgraph"},
+    "rag":                  {"rag", "retrieval augmented generation", "retrieval-augmented generation"},
+    "prompt engineering":   {"prompt engineering", "prompt design", "chain of thought"},
+    "openai api":           {"openai api", "chatgpt api", "gpt-4", "gpt-3"},
+    "groq":                 {"groq", "groq api"},
+    "huggingface":          {"huggingface", "hugging face", "transformers"},
+
+    # ── DevOps / Infra ────────────────────────────────────────────────
+    "docker":               {"docker", "dockerfile", "docker-compose", "docker compose", "containerization"},
+    "kubernetes":           {"kubernetes", "k8s", "kubectl", "helm"},
+    "aws":                  {"aws", "amazon web services", "boto3", "s3", "ec2", "aws lambda", "sagemaker"},
+    "gcp":                  {"gcp", "google cloud", "bigquery", "cloud run"},
+    "azure":                {"azure", "microsoft azure"},
+    "ci/cd":                {"ci/cd", "github actions", "jenkins", "gitlab ci", "cicd", "continuous integration"},
+    "linux":                {"linux", "ubuntu", "bash", "shell script", "unix"},
+    "terraform":            {"terraform", "infrastructure as code"},
+
+    # ── Version Control — git ≠ github (enforced) ─────────────────────
+    "git":                  {"git", "version control", "git commit", "git push", "git clone"},
+    "github":               {"github", "github.com", "github repo"},
+    "github-api":           {"github api", "pygithub", "octokit"},
+
+    # ── Web Frameworks ────────────────────────────────────────────────
+    "fastapi":              {"fastapi", "fast api"},
+    "flask":                {"flask"},
+    "django":               {"django", "django rest framework"},
+    "rest api":             {"rest api", "restful api", "api development", "http api"},
+
+    # ── Data Engineering ──────────────────────────────────────────────
+    "pandas":               {"pandas"},
+    "numpy":                {"numpy"},
+    "spark":                {"spark", "pyspark", "apache spark"},
+    "airflow":              {"airflow", "apache airflow"},
+    "mlflow":               {"mlflow"},
+    "dbt":                  {"dbt", "data build tool"},
+
+    # ── Databases ─────────────────────────────────────────────────────
+    "mongodb":              {"mongodb", "mongo", "pymongo"},
+    "redis":                {"redis"},
+    "vector database":      {"chromadb", "pinecone", "weaviate", "qdrant", "faiss", "milvus", "vector database"},
+
+    # ── Viz / UI ──────────────────────────────────────────────────────
+    "streamlit":            {"streamlit"},
+    "plotly":               {"plotly"},
+    "tableau":              {"tableau"},
+    "power bi":             {"power bi", "powerbi"},
+
+    # ── Other Tools ───────────────────────────────────────────────────
+    "jupyter":              {"jupyter", "jupyter notebook", "ipynb"},
+    "reportlab":            {"reportlab"},
+    "opencv":               {"opencv", "cv2"},
+}
+
+# ══════════════════════════════════════════════════════════════════════
+#  5 EVIDENCE LEVELS — Standard language across ALL DevPath modules
+# ══════════════════════════════════════════════════════════════════════
+EVIDENCE_LEVELS = {
+    "Confirmed": "Strong direct evidence from multiple reliable sources",
+    "Strong":    "Multiple reliable signals — resume + GitHub file inspection",
+    "Partial":   "Some evidence but incomplete — resume mention or metadata only",
+    "Weak":      "Weak or indirect signal — description mention or topic tag",
+    "Not Found": "No evidence detected in resume or GitHub",
+}
+
+def normalize_skill(skill: str) -> str:
+    """
+    Normalize a raw skill string to its canonical form.
+
+    Bug fix: substring matching removed — only exact canonical or alias match.
+    Phrase normalization (whitespace/punctuation) is applied before matching.
+    No arbitrary substring logic that can produce false positives.
+    """
+    # Clean: lowercase, strip, normalize whitespace and punctuation
+    s = skill.lower().strip()
+    s = re.sub(r"[\.\,;:()/]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+
+    # 1. Direct canonical match
+    if s in SKILL_SYNONYMS:
+        return s
+
+    # 2. Exact alias match
+    for canonical, synonyms in SKILL_SYNONYMS.items():
+        if s in synonyms:
+            return canonical
+
+    # 3. Controlled phrase normalization only:
+    #    Allow matching if cleaned version matches exactly
+    #    (e.g. "scikit learn" → "scikit-learn", "node js" → "javascript")
+    s_nopunct = re.sub(r"[-_\s]+", " ", s).strip()
+    if s_nopunct in SKILL_SYNONYMS:
+        return s_nopunct
+    for canonical, synonyms in SKILL_SYNONYMS.items():
+        canon_nopunct = re.sub(r"[-_\s]+", " ", canonical).strip()
+        if s_nopunct == canon_nopunct:
+            return canonical
+        for syn in synonyms:
+            syn_nopunct = re.sub(r"[-_\s]+", " ", syn).strip()
+            if s_nopunct == syn_nopunct:
+                return canonical
+
+    # 4. No match — return cleaned string as-is (never do substring guessing)
+    return s
+
+def normalize_skill_list(skills: list) -> list:
+    """Deduplicate and normalize a list of skills to canonical forms."""
+    seen = set()
+    result = []
+    for skill in skills:
+        if not skill or not skill.strip():
+            continue
+        normalized = normalize_skill(skill)
+        if normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return sorted(result)
+
+MARKET_DEMAND = {
+    "python": 95, "fastapi": 71, "langchain": 82, "langgraph": 72,
+    "rag": 82, "docker": 65, "kubernetes": 42, "aws": 54,
+    "gcp": 38, "azure": 45, "pytorch": 58, "tensorflow": 52,
+    "scikit-learn": 48, "pandas": 70, "numpy": 65, "sql": 63,
+    "mongodb": 40, "redis": 38, "git": 90, "ci/cd": 55,
+    "mlflow": 35, "airflow": 30, "spark": 28, "nlp": 55,
+    "machine learning": 72, "deep learning": 58, "llm": 80,
+    "vector database": 75, "streamlit": 45, "flask": 48,
+    "django": 42, "rest api": 78, "linux": 60,
+    "prompt engineering": 80,
+}
+
+def _text_has_skill(text: str, skill: str) -> bool:
+    """
+    Check if text contains a skill using word-boundary matching.
+    Prevents false positives like 'git' matching inside other words.
+    """
+    text_lower = text.lower()
+    terms = SKILL_SYNONYMS.get(skill, set()) | {skill}
+    for term in terms:
+        if not term:
+            continue
+        # Use word-boundary regex for short terms (avoids substring false positives)
+        if len(term) <= 4:
+            pattern = r'' + re.escape(term) + r''
+        else:
+            # Longer terms — substring is acceptable (e.g. "langchain" in "uses langchain")
+            pattern = re.escape(term)
+        if re.search(pattern, text_lower):
+            return True
+    return False
+
+# ══════════════════════════════════════════════════════════════════════
+#  GITHUB EVIDENCE ENGINE
+# ══════════════════════════════════════════════════════════════════════
+def fetch_github_evidence(username: str, github_token: str = "") -> dict:
+    """
+    Deep GitHub analysis — inspects repo contents, not just metadata.
+    Returns per-skill evidence with repo names, files, and strength.
+    """
+    headers = {}
+    if github_token:
+        headers["Authorization"] = f"token {github_token}"
+
+    # 1. Fetch user repos
+    try:
+        resp = requests.get(
+            f"https://api.github.com/users/{username}/repos?per_page=100",
+            headers=headers, timeout=10
+        )
+        if resp.status_code != 200:
+            return {"error": f"GitHub API error: {resp.status_code}"}
+        repos = resp.json()
+        if not isinstance(repos, list):
+            return {"error": "Invalid GitHub response"}
+    except Exception as e:
+        return {"error": str(e)}
+
+    # 2. Build evidence map: skill → list of evidence items
+    evidence_map = {skill: [] for skill in SKILL_SYNONYMS}
+
+    for repo in repos[:15]:  # inspect top 15 repos
+        repo_name = repo.get("name", "")
+        repo_desc = repo.get("description") or ""
+        repo_lang = repo.get("language") or ""
+        repo_topics = repo.get("topics") or []
+        repo_url = repo.get("html_url", "")
+
+        # Check language
+        for skill in SKILL_SYNONYMS:
+            if _text_has_skill(repo_lang, skill):
+                evidence_map[skill].append({
+                    "repo": repo_name,
+                    "type": "language",
+                    "detail": f"Primary language: {repo_lang}",
+                    "url": repo_url
+                })
+
+        # Check description
+        for skill in SKILL_SYNONYMS:
+            if _text_has_skill(repo_desc, skill):
+                evidence_map[skill].append({
+                    "repo": repo_name,
+                    "type": "description",
+                    "detail": f"Mentioned in repo description",
+                    "url": repo_url
+                })
+
+        # Check topics
+        topics_text = " ".join(repo_topics)
+        for skill in SKILL_SYNONYMS:
+            if _text_has_skill(topics_text, skill):
+                evidence_map[skill].append({
+                    "repo": repo_name,
+                    "type": "topic",
+                    "detail": f"Tagged as topic: {', '.join(t for t in repo_topics if _text_has_skill(t, skill))}",
+                    "url": repo_url
+                })
+
+        # Inspect README and requirements.txt for key repos
+        if not repo.get("fork") and repo.get("stargazers_count", 0) >= 0:
+            for fname in ["requirements.txt", "README.md", "Dockerfile", "docker-compose.yml"]:
+                try:
+                    file_resp = requests.get(
+                        f"https://api.github.com/repos/{username}/{repo_name}/contents/{fname}",
+                        headers=headers, timeout=5
+                    )
+                    if file_resp.status_code == 200:
+                        import base64
+                        file_data = file_resp.json()
+                        if file_data.get("encoding") == "base64":
+                            file_content = base64.b64decode(file_data["content"]).decode("utf-8", errors="ignore")
+                            for skill in SKILL_SYNONYMS:
+                                if _text_has_skill(file_content, skill):
+                                    # Don't duplicate same repo+skill+file
+                                    existing = [e for e in evidence_map[skill] if e["repo"]==repo_name and e["type"]==f"file:{fname}"]
+                                    if not existing:
+                                        evidence_map[skill].append({
+                                            "repo": repo_name,
+                                            "type": f"file:{fname}",
+                                            "detail": f"Found in {fname}",
+                                            "url": repo_url
+                                        })
+                except Exception:
+                    continue
+
+    # 3. Compute evidence strength per skill
+    result = {}
+    for skill, evidence in evidence_map.items():
+        if not evidence:
+            result[skill] = {
+                "evidence": [],
+                "repos": [],
+                "strength": "Not Found",
+                "strength_score": 0
+            }
+            continue
+
+        repos_found = list({e["repo"] for e in evidence})
+        file_evidence = [e for e in evidence if e["type"].startswith("file:")]
+        topic_evidence = [e for e in evidence if e["type"] == "topic"]
+
+        # Strength scoring
+        score = 0
+        score += len(repos_found) * 20          # 20pts per repo
+        score += len(file_evidence) * 15         # 15pts per file hit
+        score += len(topic_evidence) * 10        # 10pts per topic tag
+        score = min(100, score)
+
+        if score >= 70:   strength = "Strong"
+        elif score >= 40: strength = "Partial"
+        elif score >= 10: strength = "Weak"
+        else:             strength = "Not Found"
+
+        result[skill] = {
+            "evidence": evidence[:5],  # keep top 5 evidence items
+            "repos": repos_found,
+            "strength": strength,
+            "strength_score": score
+        }
+
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  SKILL EVIDENCE ENGINE — Central source of truth
+# ══════════════════════════════════════════════════════════════════════
+def build_skill_matrix(
+    resume_text: str,
+    resume_skills: list,
+    github_evidence: dict,
+    target_role: str = "AI Engineer",
+    role_skills: dict = None
+) -> dict:
+    """
+    Build the central Skill Matrix — the single source of truth.
+
+    Fix 3: Evidence and Readiness are now SEPARATE concepts.
+
+    EVIDENCE  = what signals exist (resume mention + GitHub depth)
+    READINESS = evidence × role_requirement × market_demand
+
+    Returns per-skill dict with full traceable evidence chain.
+    """
+    matrix = {}
+    role_skills = role_skills or {}
+
+    # Normalize all inputs using canonical taxonomy
+    normalized_resume_skills = normalize_skill_list(resume_skills)
+
+    # All skills to evaluate = canonical skills + resume skills
+    all_skills = set(SKILL_SYNONYMS.keys()) | set(normalized_resume_skills)
+
+    for skill in sorted(all_skills):
+        # ── STEP 1: Collect raw evidence (separate from readiness) ──────
+        # Resume evidence
+        resume_has = (
+            skill in normalized_resume_skills or
+            _text_has_skill(resume_text, skill)
+        )
+
+        # GitHub evidence — look up canonical skill
+        gh_data = github_evidence.get(skill, {})
+        if not gh_data:
+            canonical = normalize_skill(skill)
+            gh_data = github_evidence.get(canonical, {})
+
+        gh_strength     = gh_data.get("strength", "Not Found")
+        gh_evidence_items = gh_data.get("evidence", [])
+        gh_repos        = gh_data.get("repos", [])
+
+        # ── STEP 2: Compute evidence level (5 levels, traceable) ─────────
+        # Evidence = purely what we found, NOT readiness yet
+        # Check if strong file evidence exists (Dockerfile, config, requirements)
+        # README mention alone does NOT qualify as "Confirmed"
+        has_file_evidence = any(
+            e.get("type","").startswith("file:") and
+            "readme" not in e.get("type","").lower()
+            for e in gh_evidence_items
+        )
+
+        if resume_has and gh_strength == "Strong" and has_file_evidence:
+            evidence_level = "Confirmed"
+            evidence_reason = f"Resume + GitHub file evidence in {', '.join(gh_repos[:2]) or 'repos'}"
+        elif resume_has and gh_strength == "Strong" and not has_file_evidence:
+            evidence_level = "Strong"
+            evidence_reason = f"Resume mention + GitHub metadata/README in {', '.join(gh_repos[:2]) or 'repos'}"
+        elif resume_has and gh_strength == "Partial":
+            evidence_level = "Strong"
+            evidence_reason = f"Resume mention + partial GitHub evidence"
+        elif resume_has and gh_strength == "Weak":
+            evidence_level = "Partial"
+            evidence_reason = "Resume mention + weak GitHub signal (topic/description only)"
+        elif resume_has and gh_strength == "Not Found":
+            evidence_level = "Partial"
+            evidence_reason = "Resume mention only — no GitHub evidence found"
+        elif not resume_has and gh_strength in ("Strong", "Partial"):
+            evidence_level = "Weak"
+            evidence_reason = f"GitHub only — not on resume ({', '.join(gh_repos[:2])})"
+        else:
+            evidence_level = "Not Found"
+            evidence_reason = "No evidence in resume or GitHub"
+
+        # ── STEP 3: Compute readiness SEPARATELY from evidence ───────────
+        # Readiness = evidence_score × role_weight × market_weight
+        market = MARKET_DEMAND.get(skill, 0)
+        role_required = skill in [normalize_skill(s) for s in role_skills.keys()]
+
+        # Evidence score (0-100)
+        evidence_score = {
+            "Confirmed": 100,
+            "Strong":    75,
+            "Partial":   45,
+            "Weak":      20,
+            "Not Found": 0,
+        }.get(evidence_level, 0)
+
+        # Role weight
+        role_weight = 1.3 if role_required else 1.0
+
+        # Raw readiness = evidence score (role weight is for gap priority, not readiness)
+        readiness = min(100, round(evidence_score * role_weight / 1.3))
+
+        # ── STEP 4: Priority is NOT computed here (belongs in Phase 4/5 Gap Engine)
+        # Priority requires: role requirements + market demand + readiness
+        # These are computed AFTER the matrix is built, not inside it.
+        # See compute_gap_priorities() for the priority computation.
+
+        # ── STEP 5: Build traceable evidence chain ────────────────────────
+        evidence_trace = []
+        if resume_has:
+            evidence_trace.append({
+                "source": "Resume",
+                "detail": f"Skill mentioned in uploaded resume",
+                "strength": "Direct"
+            })
+        for ev in gh_evidence_items[:3]:
+            evidence_trace.append({
+                "source":   "GitHub",
+                "repo":     ev.get("repo", ""),
+                "file":     ev.get("type", "").replace("file:", ""),
+                "detail":   ev.get("detail", ""),
+                "strength": gh_strength,
+                "url":      ev.get("url", "")
+            })
+
+        matrix[skill] = {
+            # ── Evidence (Phase 1 — what we found) ───────────────────
+            "resume":           resume_has,
+            "github_strength":  gh_strength,
+            "github_evidence":  gh_evidence_items,
+            "github_repos":     gh_repos,
+            "evidence_level":   evidence_level,    # Confirmed/Strong/Partial/Weak/Not Found
+            "evidence_reason":  evidence_reason,   # Human-readable explanation
+            "evidence_trace":   evidence_trace,    # Full traceable chain
+
+            # ── Readiness (computed from evidence only, no role/market yet) ──
+            "readiness":        readiness,
+
+            # ── Market context (stored for Phase 4/5 use) ──────────────
+            "market_demand":    market,            # Hiring demand % (NOT user proficiency)
+            "role_required":    role_required,
+
+            # ── Backward compat alias ─────────────────────────────────
+            "confidence":       evidence_level,
+            # priority is NOT stored here — computed in compute_gap_priorities()
+        }
+
+    return matrix
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  GAP + PRIORITY ENGINE
+# ══════════════════════════════════════════════════════════════════════
+def compute_gap_priorities(skill_matrix: dict) -> list:
+    """
+    Rank skill gaps by:
+      role_weight × market_demand × (1 - readiness) × evidence_factor
+
+    Bug fix: priority_label is computed HERE from priority_score.
+    build_skill_matrix() does NOT store "priority" — that belongs here.
+    """
+    gaps = []
+    for skill, data in skill_matrix.items():
+        readiness = data.get("readiness", 0)
+        if readiness >= 90:
+            continue  # already strong — skip
+
+        role_required = data.get("role_required", False)
+        market_demand = data.get("market_demand", 0)
+        evidence_level = data.get("evidence_level", data.get("confidence", "Not Found"))
+
+        role_w = 1.5 if role_required else 1.0
+        market_w = market_demand / 100
+        gap_w = (100 - readiness) / 100
+        evidence_factor = {
+            "Confirmed": 0.1,
+            "Strong":    0.3,
+            "Partial":   0.7,
+            "Weak":      0.9,
+            "Not Found": 1.0,
+        }.get(evidence_level, 1.0)
+
+        priority_score = round(role_w * market_w * gap_w * evidence_factor * 100)
+
+        if priority_score < 5:
+            continue
+
+        # Compute priority_label from score — NOT from matrix["priority"]
+        if priority_score >= 60:
+            priority_label = "Critical"
+        elif priority_score >= 40:
+            priority_label = "High"
+        elif priority_score >= 20:
+            priority_label = "Medium"
+        else:
+            priority_label = "Low"
+
+        gaps.append({
+            "skill":          skill,
+            "priority_score": priority_score,
+            "priority_label": priority_label,   # computed here, not from matrix
+            "readiness":      readiness,
+            "market_demand":  market_demand,
+            "evidence_level": evidence_level,
+            "confidence":     evidence_level,   # alias for backward compat
+            "role_required":  role_required,
+        })
+
+    return sorted(gaps, key=lambda x: -x["priority_score"])
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  SKILL MATRIX DISPLAY HELPERS
+# ══════════════════════════════════════════════════════════════════════
+CONFIDENCE_COLOR = {
+    "Confirmed": "#22C55E",
+    "Strong":    "#22C55E",
+    "Partial":   "#F59E0B",
+    "Weak":      "#F97316",
+    "Not Found": "#EF4444",  # fixed: was "None"
+}
+
+CONFIDENCE_ICON = {
+    "Confirmed": "✅",
+    "Strong":    "✅",
+    "Partial":   "⚠️",
+    "Weak":      "🟠",
+    "Not Found": "❌",        # fixed: was "None"
+}
+
+PRIORITY_COLOR = {
+    "Critical": "#EF4444",
+    "High":     "#F97316",
+    "Medium":   "#F59E0B",
+    "Low":      "#6B7280",
+    "None":     "#D1D5DB",
+}
+
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  RAG ENGINE — imported from rag_engine.py (single source of truth)
 # ══════════════════════════════════════════════════════════════════════
 try:
@@ -161,12 +728,16 @@ def ask_openai_direct(prompt: str, system: str = "") -> str:
     """Wrapper — uses Groq LLaMA for all calls."""
     return ask_llm(prompt)
 
+# ── Prototype Dataset ─────────────────────────────────────────────────
+# Source: Manually curated from LinkedIn/Glassdoor/Naukri (Q1-Q3 2026)
+# Geography: India + US | Note: Demand estimates, not authoritative data
+# Replace with live job-scraping pipeline for production use.
 ROLE_MARKET_DATA = {
     "AI Engineer": {
         "demand":"Very High","demand_trend":"↑ 42% YoY",
         "salary_india":"₹8L – ₹24L","salary_us":"$90K – $160K",
         "top_companies":["Google","OpenAI","Microsoft","Anthropic","Startups"],
-        "skills":{"python":95,"git":90,"langchain":82,"llm integration":78,"fastapi":71,"docker":65,"sql":63,"pytorch":58,"aws":54,"kubernetes":42},
+        "skills":{"python":95,"git":90,"langchain":82,"llm":78,"fastapi":71,"docker":65,"sql":63,"pytorch":58,"aws":54,"kubernetes":42},
         "emerging":["RAG","LangGraph","Vector DBs","Prompt Eng."],
         "description":"Builds and maintains AI-powered products and APIs."
     },
@@ -198,7 +769,7 @@ ROLE_MARKET_DATA = {
         "demand":"Extremely High","demand_trend":"↑ 120% YoY",
         "salary_india":"₹12L – ₹35L","salary_us":"$110K – $200K",
         "top_companies":["OpenAI","Anthropic","Cohere","Hugging Face","Startups"],
-        "skills":{"python":95,"langchain":90,"openai api":85,"prompt engineering":88,"rag":82,"vector databases":78,"fastapi":70,"docker":65,"langgraph":72,"git":88},
+        "skills":{"python":95,"langchain":90,"openai api":85,"prompt engineering":88,"rag":82,"vector database":78,"fastapi":70,"docker":65,"langgraph":72,"git":88},
         "emerging":["Agentic AI","Multi-modal","Fine-tuning","LangGraph"],
         "description":"Builds products powered by large language models and generative AI."
     },
@@ -247,30 +818,70 @@ def fetch_github(username: str) -> dict:
         return {"error":str(e)}
 
 def compute_portfolio_signals(github_data: dict) -> dict:
-    repos=github_data.get("repos",[])
-    top=sorted(repos,key=lambda r:r.get("stargazers_count",0),reverse=True)[:8]
-    cp={"Deployment":0,"Documentation":0,"Originality":0,"Consistency":0,"Code Quality":0}
-    cm={"Deployment":3,"Documentation":2,"Originality":2,"Consistency":2,"Code Quality":1}
-    scored=[]; ts=0; ms=0; now=datetime.utcnow()
+    """
+    Portfolio Score from real repo signals.
+
+    Bug fix: Code Quality now uses test/CI signals, NOT stars.
+    Stars = Popularity. Code Quality = evidence of tests or CI config.
+
+    Categories:
+    - Deployment   (3pts): Has live demo / homepage link
+    - Documentation(2pts): Has description
+    - Originality  (2pts): Not a fork
+    - Consistency  (2pts): Pushed within last 180 days
+    - Code Quality (2pts): Has test/CI topics or meaningful description
+    """
+    repos = github_data.get("repos", [])
+    top = sorted(repos, key=lambda r: (
+        not r.get("fork", False), r.get("pushed_at", "")
+    ), reverse=True)[:8]
+
+    cp = {"Deployment":0, "Documentation":0, "Originality":0, "Consistency":0, "Code Quality":0}
+    cm = {"Deployment":3, "Documentation":2, "Originality":2, "Consistency":2, "Code Quality":2}
+    scored = []; ts = 0; ms = 0; now = datetime.utcnow()
+
     for r in top:
-        dep=3 if r.get("homepage") else 0
-        doc=2 if r.get("description") else 0
-        orig=2 if not r.get("fork") else 0
-        pop=1 if r.get("stargazers_count",0)>0 else 0
-        recent=False
+        dep  = 3 if r.get("homepage") else 0
+        doc  = 2 if r.get("description") else 0
+        orig = 2 if not r.get("fork") else 0
+        recent = False
         if r.get("pushed_at"):
-            try: recent=(now-datetime.strptime(r["pushed_at"],"%Y-%m-%dT%H:%M:%SZ")).days<=180
-            except: pass
-        cons=2 if recent else 0; s=dep+doc+orig+pop+cons
-        for k,v in zip(cp.keys(),[dep,doc,orig,cons,pop]): cp[k]+=v
-        scored.append({"name":r["name"],"score":s,"max":10,"description":r.get("description"),
-                       "deployed":bool(r.get("homepage")),"stars":r.get("stargazers_count",0),"recently_updated":recent})
-        ts+=s; ms+=10
-    n=len(top) or 1
-    bd={cat:round((cp[cat]/(cm[cat]*n))*100) for cat in cp}
-    ps=round((ts/ms)*100) if ms else 0
-    st2=[cat for cat,p in bd.items() if p>=60]; wk=[cat for cat,p in bd.items() if p<40]
-    if len(github_data.get("languages",[]))>=3: st2.append("Language Diversity")
+            try:
+                recent = (now - datetime.strptime(
+                    r["pushed_at"], "%Y-%m-%dT%H:%M:%SZ")).days <= 180
+            except Exception:
+                pass
+        cons = 2 if recent else 0
+
+        # Code Quality — real signals only
+        topics = [t.lower() for t in (r.get("topics") or [])]
+        repo_name = r.get("name", "").lower()
+        has_quality = (
+            any(t in topics for t in ["testing","ci","pytest","unittest","github-actions"]) or
+            any(kw in repo_name for kw in ["test","ci","pipeline"])
+        )
+        qual = 2 if has_quality else (1 if len(r.get("description") or "") > 50 else 0)
+
+        s = dep + doc + orig + cons + qual
+        for k, v in zip(cp.keys(), [dep, doc, orig, cons, qual]):
+            cp[k] += v
+        scored.append({
+            "name": r["name"], "score": s, "max": 11,
+            "description": r.get("description"),
+            "deployed": bool(r.get("homepage")),
+            "stars": r.get("stargazers_count", 0),
+            "recently_updated": recent,
+            "has_quality": has_quality,
+            "url": r.get("html_url", ""),
+        })
+        ts += s; ms += 11
+
+    n = len(top) or 1
+    bd = {cat: round((cp[cat] / (cm[cat] * n)) * 100) for cat in cp}
+    ps = round((ts / ms) * 100) if ms else 0
+    st2 = [cat for cat, p in bd.items() if p >= 60]
+    wk  = [cat for cat, p in bd.items() if p < 40]
+    if len(github_data.get("languages", [])) >= 3: st2.append("Language Diversity")
     else: wk.append("Language Diversity")
     return {"portfolio_score":ps,"breakdown":bd,"ranked_repos":sorted(scored,key=lambda x:-x["score"]),"strengths":st2,"weaknesses":wk}
 
@@ -330,8 +941,13 @@ def compute_ats_score(resume_text: str) -> dict:
     hc=bool(re.search(r"(?m)^[A-Z][A-Z\s]{3,}$",resume_text))
     fmt=min(17,ls+(3 if hb else 0)+(2 if hd else 0)+(2 if hc else 0))  # max 17, realistic
     total=min(92,contact_score+section_score+skills_score+kw_score+fmt)  # 92 max — realistic
-    return {"score":total,"categories":{"Contact Info":{"score":contact_score,"max":20},"Resume Sections":{"score":section_score,"max":20},
-            "Skills Coverage":{"score":skills_score,"max":20},"Keywords & Verbs":{"score":kw_score,"max":20},"Formatting & Length":{"score":fmt,"max":20}},
+    return {"score":total,"categories":{
+                "Contact Info":        {"score":contact_score, "max":15},  # max 15 (email+phone+linkedin+github = 5+4+3+3)
+                "Resume Sections":     {"score":section_score, "max":20},
+                "Skills Coverage":     {"score":skills_score,  "max":20},
+                "Keywords & Verbs":    {"score":kw_score,       "max":20},
+                "Formatting & Length": {"score":fmt,            "max":17}, # max 17 (capped)
+            },
             "sections":sections,"found_keywords":found_kw,"has_email":has_email,"has_phone":has_phone,
             "has_linkedin":has_linkedin,"has_github_link":has_github,"word_count":wc,"verb_count":vc,"quant_count":qc}
 
@@ -339,52 +955,8 @@ def compute_ats_score(resume_text: str) -> dict:
 #  PHASE 1 — Resume Intelligence: robust skill extraction
 # ══════════════════════════════════════════════════════════════════════
 
-# ── Canonical skill normalization ───────────────────────────────────────
-CANONICAL_SKILLS = {
-    "scikit-learn": {"sklearn", "scikit learn", "scikit-learn", "scikitlearn"},
-    "tensorflow": {"tensorflow", "tf"},
-    "pytorch": {"pytorch", "torch"},
-    "langchain": {"langchain", "lang chain"},
-    "langgraph": {"langgraph", "lang graph"},
-    "fastapi": {"fastapi", "fast api"},
-    "postgresql": {"postgresql", "postgres", "psql"},
-    "mongodb": {"mongodb", "mongo"},
-    "machine learning": {"machine learning", "ml"},
-    "deep learning": {"deep learning", "dl"},
-    "natural language processing": {"nlp", "natural language processing"},
-    "large language models": {"llm", "llms", "large language model", "large language models"},
-    "rag": {"rag", "retrieval augmented generation", "retrieval-augmented generation"},
-    "docker": {"docker", "containerization"},
-    "git": {"git", "git/github", "version control"},
-    "rest api": {"rest api", "rest apis", "restful api", "restful apis", "api development"},
-    "sql": {"sql", "structured query language"},
-    "prompt engineering": {"prompt engineering", "prompt design"},
-    "streamlit": {"streamlit"},
-    "chromadb": {"chromadb", "chroma"},
-    "aws": {"aws", "amazon web services"},
-    "gcp": {"gcp", "google cloud", "google cloud platform"},
-    "azure": {"azure", "microsoft azure"},
-    "pandas": {"pandas"},
-    "numpy": {"numpy"},
-}
-_REVERSE_CANON = {alias: canon for canon, aliases in CANONICAL_SKILLS.items() for alias in aliases}
-
-def normalize_skill(raw: str) -> str:
-    """Map a raw skill string to its canonical form. Falls back to cleaned original."""
-    s = raw.lower().strip()
-    s = re.sub(r"[\.\,;:()]+$", "", s)
-    s = re.sub(r"\s+", " ", s)
-    return _REVERSE_CANON.get(s, s)
-
-def normalize_skill_list(skills: list) -> list:
-    seen = set()
-    out = []
-    for s in skills:
-        n = normalize_skill(s)
-        if n and n not in seen:
-            seen.add(n)
-            out.append(n)
-    return sorted(out)
+# CANONICAL_SKILLS removed — SKILL_SYNONYMS above is the ONE taxonomy.
+# normalize_skill and normalize_skill_list are defined in the Skill Evidence Engine.
 
 # ── Robust LLM JSON extraction ──────────────────────────────────────────
 def strip_think(text: str) -> str:
@@ -687,46 +1259,74 @@ def render_structured_analysis(analysis_text: str):
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-SKILL_SYNONYMS={"machine learning":{"ml","scikit-learn","sklearn","tensorflow","pytorch","keras","xgboost"},
-    "deep learning":{"tensorflow","pytorch","keras","neural networks","cnn","rnn"},
-    "nlp":{"natural language processing","spacy","nltk","transformers","huggingface","langchain"},
-    "web development":{"html","css","javascript","react","django","flask","fastapi","node.js"},
-    "cloud":{"aws","gcp","azure","docker","kubernetes"},"devops":{"docker","kubernetes","ci/cd","jenkins"},
-    "database":{"sql","mysql","postgresql","mongodb","sqlite","redis"},
-    "data science":{"pandas","numpy","scikit-learn","matplotlib","jupyter"},
-    "ai agents":{"langchain","langgraph","openai","groq","llm","llama","agent"}}
+# SKILL_SYNONYMS is defined in the Skill Evidence Engine above — ONE canonical definition.
+# _expand and _matches now use the canonical SKILL_SYNONYMS and normalize_skill.
 
-def _expand(skill):
-    s=skill.lower().strip(); r={s}
-    for k,g in SKILL_SYNONYMS.items():
-        if s==k or s in g: r|=g|{k}
-    return r
+def _expand(skill: str) -> set:
+    """Expand a skill to all its synonyms using the canonical taxonomy."""
+    canonical = normalize_skill(skill)
+    related = {canonical, skill.lower()}
+    synonyms = SKILL_SYNONYMS.get(canonical, set())
+    related |= synonyms
+    return related
 
-def _matches(claimed,evidence):
+def _matches(claimed: str, evidence: set) -> bool:
+    """Check if a claimed skill matches any evidence using canonical expansion."""
     for c in _expand(claimed):
         for e in evidence:
-            if c==e or (len(c)>3 and (c in e or e in c)): return True
+            if c == e or (len(c) > 3 and (c in e or e in c)):
+                return True
     return False
 
-def compute_overlap(claimed,evidence):
-    cs=set(claimed); es=set(evidence)
-    verified=sorted(c for c in cs if _matches(c,es))
-    unverified=sorted(cs-set(verified)); extra=sorted(es-cs)
-    score=round((len(verified)/len(cs))*100) if cs else 0
-    return {"verified":verified,"unverified":unverified,"extra":extra,"score":score}
+def compute_overlap(claimed: list, evidence: list) -> dict:
+    """
+    Compute skill overlap using canonical normalization.
+    Fix: uses normalize_skill() instead of fuzzy substring matching.
+    All comparisons happen at canonical skill level.
+    """
+    # Normalize both lists to canonical form
+    claimed_canonical  = {normalize_skill(s): s for s in claimed if s.strip()}
+    evidence_canonical = {normalize_skill(s) for s in evidence if s.strip()}
 
-def compute_market_readiness(user_skills,role_skills):
-    us={s.lower().strip() for s in user_skills}
-    matched={}; missing={}
-    for skill,pct in role_skills.items():
-        sl=skill.lower()
-        found=any(sl in u or u in sl or (len(sl)>3 and sl[:4] in u) for u in us)
-        if found: matched[skill]=pct
-        else: missing[skill]=pct
-    td=sum(role_skills.values()); md=sum(matched.values())
-    rs=round((md/td)*100) if td else 0
-    return {"score":rs,"matched":matched,"missing":missing,"priority_gaps":sorted(missing.items(),key=lambda x:-x[1]),
-            "total_skills_required":len(role_skills),"skills_you_have":len(matched)}
+    verified   = sorted(orig for canon, orig in claimed_canonical.items() if canon in evidence_canonical)
+    unverified = sorted(orig for canon, orig in claimed_canonical.items() if canon not in evidence_canonical)
+    extra      = sorted(evidence_canonical - set(claimed_canonical.keys()))
+    score      = round((len(verified) / len(claimed_canonical)) * 100) if claimed_canonical else 0
+
+    return {
+        "verified":   verified,
+        "unverified": unverified,
+        "extra":      extra,
+        "score":      score,
+    }
+
+def compute_market_readiness(user_skills: list, role_skills: dict) -> dict:
+    """
+    Compute market readiness using canonical skill normalization.
+    Fix: no more fuzzy substring matching. normalize_skill() for all comparisons.
+    """
+    # Normalize user skills to canonical set
+    user_canonical = {normalize_skill(s) for s in user_skills if s.strip()}
+    matched = {}; missing = {}
+
+    for skill, pct in role_skills.items():
+        skill_canonical = normalize_skill(skill)
+        found = skill_canonical in user_canonical
+        if found: matched[skill] = pct
+        else:     missing[skill] = pct
+
+    td = sum(role_skills.values())
+    md = sum(matched.values())
+    rs = round((md / td) * 100) if td else 0
+
+    return {
+        "score":                rs,
+        "matched":              matched,
+        "missing":              missing,
+        "priority_gaps":        sorted(missing.items(), key=lambda x: -x[1]),
+        "total_skills_required":len(role_skills),
+        "skills_you_have":      len(matched),
+    }
 
 def compute_devpath_score(state):
     w={}
@@ -828,6 +1428,7 @@ def ask_agent(query: str) -> str:
 
 
 defaults={"resume_text":None,"resume_skills":None,"resume_analysis":None,
+    "skill_matrix":None,"github_evidence_map":None,"gap_priorities":None,
     "ats_score":None,"ats_categories":None,"ats_data":None,
     "github_data":None,"github_skills":None,"portfolio":None,
     "reality_check":None,"job_match":None,"roadmap":None,"skill_coverage":None,
@@ -917,10 +1518,24 @@ def cs(title="",subtitle="",style=""):
 def ce():
     st.markdown('</div>',unsafe_allow_html=True)
 
-def sbar(skill,pct,have_it=None,show_status=False):
-    bc="#22C55E" if have_it else "#E91E63" if have_it is False else "#7C3AED"
-    sh=f'<span style="font-size:14px;">{"✅" if have_it else "🟡" if have_it is None else "❌"}</span>' if show_status else ""
-    st.markdown(f'<div class="skill-row"><div class="skill-row-top"><span class="skill-name">{skill.title()}</span><div style="display:flex;align-items:center;gap:8px;"><span class="skill-pct">{pct}%</span>{sh}</div></div><div class="skill-bar-track"><div style="width:{pct}%;background:{bc};height:6px;border-radius:99px;"></div></div></div>',unsafe_allow_html=True)
+def sbar(skill, pct, have_it=None, show_status=False, label="Hiring Demand"):
+    """Render a skill bar. pct = market hiring demand (NOT user proficiency)."""
+    bc = "#22C55E" if have_it else "#E91E63" if have_it is False else "#7C3AED"
+    sh = f'<span style="font-size:14px;">{"✅" if have_it else "🟡" if have_it is None else "❌"}</span>' if show_status else ""
+    st.markdown(f"""
+    <div class="skill-row">
+        <div class="skill-row-top">
+            <span class="skill-name">{skill.title()}</span>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-size:10px;color:#9090A8;font-weight:600;">{label}</span>
+                <span class="skill-pct">{pct}%</span>
+                {sh}
+            </div>
+        </div>
+        <div class="skill-bar-track">
+            <div style="width:{pct}%;background:{bc};height:6px;border-radius:99px;"></div>
+        </div>
+    </div>""", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1084,6 +1699,47 @@ if page=="🏠  Overview":
         ce()
     with b3:
         st.markdown('<div class="quote-block"><div style="font-size:32px;color:#E91E63;margin-bottom:8px;">"</div><div style="font-size:13px;color:#4A4A5A;line-height:1.6;font-style:italic;">The best investment you can make is in yourself. Keep building.</div><div style="font-size:11px;color:#9090A8;margin-top:10px;font-weight:600;">— DevPath AI Copilot</div></div>',unsafe_allow_html=True)
+
+    # ── Gap Priority Panel ─────────────────────────────────────────────
+    st.markdown("<br>",unsafe_allow_html=True)
+    if st.session_state.get("gap_priorities"):
+        cs("🎯 Priority Skill Gaps","Computed from Resume + GitHub + Market demand · Not LLM-guessed")
+        gaps = st.session_state.gap_priorities[:5]
+        for gap in gaps:
+            pc = PRIORITY_COLOR.get(gap["priority_label"], "#9090A8")
+            conf_c = CONFIDENCE_COLOR.get(gap["confidence"], "#9090A8")
+            bw = gap["market_demand"]
+            st.markdown(f"""
+            <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #F8F7FF;">
+                <span style="background:{pc}18;color:{pc};border:1px solid {pc}44;
+                    border-radius:6px;padding:2px 8px;font-size:10px;font-weight:800;width:58px;text-align:center;flex-shrink:0;">
+                    {gap["priority_label"]}
+                </span>
+                <span style="font-size:13px;font-weight:600;color:#1E1E2E;flex:1;">{gap["skill"].title()}</span>
+                <div style="width:80px;background:#F0EEF8;border-radius:99px;height:5px;">
+                    <div style="width:{bw}%;background:{pc};height:5px;border-radius:99px;"></div>
+                </div>
+                <span style="font-size:11px;color:#9090A8;width:30px;">{bw}%</span>
+                <span style="background:{conf_c}18;color:{conf_c};border:1px solid {conf_c}44;
+                    border-radius:20px;padding:2px 8px;font-size:10px;font-weight:600;flex-shrink:0;">
+                    {gap["confidence"]}
+                </span>
+            </div>""", unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:11px;color:#9090A8;margin-top:6px;">Top {len(gaps)} of {len(st.session_state.gap_priorities)} gaps · Run GitHub Analysis + Resume to compute</div>', unsafe_allow_html=True)
+        ce()
+    else:
+        cs("📌 Next Steps")
+        actions=[("🐙","Analyze GitHub","GitHub Intelligence"),
+                 ("📄","Upload Resume","Resume Intelligence"),
+                 ("🌉","Reality Check","Verify your claims"),
+                 ("💼","Job Match","See your fit")]
+        cols=st.columns(4)
+        for i,(icon,title,desc) in enumerate(actions):
+            with cols[i]:
+                st.markdown(f'<div style="background:rgba(233,30,99,0.03);border:1px solid rgba(233,30,99,0.1);border-radius:14px;padding:14px;text-align:center;"><div style="font-size:22px;margin-bottom:6px;">{icon}</div><div style="font-size:13px;font-weight:700;color:#1E1E2E;margin-bottom:3px;">{title}</div><div style="font-size:11px;color:#9090A8;">{desc}</div></div>',unsafe_allow_html=True)
+        ce()
+
+    st.markdown('<div class="quote-block"><div style="font-size:32px;color:#E91E63;margin-bottom:8px;">"</div><div style="font-size:13px;color:#4A4A5A;line-height:1.6;font-style:italic;">The best investment you can make is in yourself. Keep building.</div><div style="font-size:11px;color:#9090A8;margin-top:10px;font-weight:600;">— DevPath AI Copilot</div></div>',unsafe_allow_html=True)
     st.markdown('</div>',unsafe_allow_html=True)
 
 
@@ -1143,6 +1799,16 @@ elif page=="📄  Resume Intelligence":
                 st.session_state.resume_analysis = generate_structured_resume_analysis(
                     text, st.session_state.resume_skills, evidence=rag_evidence
                 )
+            # Rebuild Skill Matrix if GitHub evidence already exists
+            if st.session_state.github_evidence_map:
+                st.session_state.skill_matrix = build_skill_matrix(
+                    resume_text=st.session_state.resume_text or "",
+                    resume_skills=st.session_state.resume_skills,
+                    github_evidence=st.session_state.github_evidence_map,
+                    target_role=st.session_state.get("market_role","AI Engineer"),
+                )
+                st.session_state.gap_priorities = compute_gap_priorities(st.session_state.skill_matrix)
+
             log_activity("Resume analyzed","📄"); st.success("✅ Done!")
     ce()
     if st.session_state.ats_score is not None:
@@ -1205,6 +1871,22 @@ elif page=="🐙  GitHub Analysis":
                     extracted=extract_skills_llm(build_github_skill_text(data),"GitHub profile")
                     st.session_state.github_skills=sorted(set(extracted)|{l.lower() for l in data["languages"]})
                 st.session_state.portfolio=compute_portfolio_signals(data)
+
+                # Build GitHub Evidence Map (deep skill inspection)
+                with st.spinner("🔍 Building skill evidence map from repos..."):
+                    gh_token = os.getenv("GITHUB_TOKEN","") or st.secrets.get("GITHUB_TOKEN","")
+                    st.session_state.github_evidence_map = fetch_github_evidence(username, gh_token)
+
+                # Build Skill Matrix if resume is also loaded
+                if st.session_state.resume_skills and st.session_state.github_evidence_map:
+                    st.session_state.skill_matrix = build_skill_matrix(
+                        resume_text=st.session_state.resume_text or "",
+                        resume_skills=st.session_state.resume_skills,
+                        github_evidence=st.session_state.github_evidence_map,
+                        target_role=st.session_state.get("market_role","AI Engineer"),
+                    )
+                    st.session_state.gap_priorities = compute_gap_priorities(st.session_state.skill_matrix)
+
                 log_activity(f"GitHub '{username}' analyzed","🐙"); st.success("✅ Done!")
     ce()
     if st.session_state.portfolio and st.session_state.github_data:
@@ -1272,6 +1954,51 @@ elif page=="🌉  Reality Check":
             cs(); st.markdown(f'<div style="font-size:11px;color:#9090A8;font-weight:600;margin-bottom:8px;">CLAIMED SKILLS</div><div style="font-size:40px;font-weight:800;color:#1E1E2E;">{len(rc["verified"])+len(rc["unverified"])}</div>',unsafe_allow_html=True); ce()
         with c3:
             cs(); st.markdown(f'<div style="font-size:11px;color:#9090A8;font-weight:600;margin-bottom:8px;">VERIFIED ON GITHUB</div><div style="font-size:40px;font-weight:800;color:#22C55E;">{len(rc["verified"])}</div>',unsafe_allow_html=True); ce()
+
+        # ── Skill Matrix Table (if available) ─────────────────────────
+        if st.session_state.get("skill_matrix"):
+            st.markdown("<br>",unsafe_allow_html=True)
+            cs("📊 Skill Evidence Matrix","Every skill — Resume status · GitHub depth · Market demand · Readiness")
+            sm = st.session_state.skill_matrix
+            # Show only skills that appear in resume or have github evidence
+            relevant = {k:v for k,v in sm.items() if v["resume"] or v["github_strength"] != "Not Found"}
+            if relevant:
+                st.markdown("""
+                <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead><tr>
+                    <th style="text-align:left;padding:8px 10px;background:#F8F7FF;color:#6B6880;font-weight:700;border-bottom:2px solid #F0EEF8;">Skill</th>
+                    <th style="text-align:center;padding:8px 10px;background:#F8F7FF;color:#6B6880;font-weight:700;border-bottom:2px solid #F0EEF8;">Resume</th>
+                    <th style="text-align:center;padding:8px 10px;background:#F8F7FF;color:#6B6880;font-weight:700;border-bottom:2px solid #F0EEF8;">GitHub</th>
+                    <th style="text-align:center;padding:8px 10px;background:#F8F7FF;color:#6B6880;font-weight:700;border-bottom:2px solid #F0EEF8;">Market</th>
+                    <th style="text-align:center;padding:8px 10px;background:#F8F7FF;color:#6B6880;font-weight:700;border-bottom:2px solid #F0EEF8;">Confidence</th>
+                    <th style="text-align:center;padding:8px 10px;background:#F8F7FF;color:#6B6880;font-weight:700;border-bottom:2px solid #F0EEF8;">Repos</th>
+                </tr></thead><tbody>""", unsafe_allow_html=True)
+
+                for skill, data in sorted(relevant.items(), key=lambda x: -x[1]["readiness"]):
+                    r_icon = "✅" if data["resume"] else "—"
+                    gh_icon = CONFIDENCE_ICON.get(data["github_strength"], "—")
+                    conf_color = CONFIDENCE_COLOR.get(data["confidence"], "#9090A8")
+                    repos_str = ", ".join(data["github_repos"][:2]) if data["github_repos"] else "—"
+                    market = data["market_demand"]
+                    market_bar = f'<div style="background:#F0EEF8;border-radius:99px;height:4px;width:60px;display:inline-block;vertical-align:middle;"><div style="width:{market}%;background:#7C3AED;height:4px;border-radius:99px;"></div></div> {market}%'
+                    st.markdown(f"""
+                    <tr style="border-bottom:1px solid #F8F7FF;">
+                        <td style="padding:8px 10px;font-weight:600;color:#1E1E2E;">{skill.title()}</td>
+                        <td style="padding:8px 10px;text-align:center;">{r_icon}</td>
+                        <td style="padding:8px 10px;text-align:center;">{gh_icon} {data["github_strength"]}</td>
+                        <td style="padding:8px 10px;text-align:center;">{market_bar}</td>
+                        <td style="padding:8px 10px;text-align:center;">
+                            <span style="background:{conf_color}18;color:{conf_color};border:1px solid {conf_color}44;
+                                border-radius:20px;padding:2px 10px;font-size:11px;font-weight:700;">
+                                {data["confidence"]}
+                            </span>
+                        </td>
+                        <td style="padding:8px 10px;font-size:11px;color:#6B6880;">{repos_str}</td>
+                    </tr>""", unsafe_allow_html=True)
+
+                st.markdown("</tbody></table>", unsafe_allow_html=True)
+                st.markdown(f'<div style="font-size:11px;color:#9090A8;margin-top:8px;">{len(relevant)} skills analyzed</div>', unsafe_allow_html=True)
+            ce()
         st.markdown("<br>",unsafe_allow_html=True)
         cs("📊 Skill-by-Skill Breakdown")
         for skill in rc["verified"]+rc["unverified"]:
@@ -1332,7 +2059,7 @@ elif page=="💼  Job Match":
 #  MARKET INTELLIGENCE
 # ══════════════════════════════════════════════════════════════════════
 elif page=="📈  Market Intelligence":
-    ph("📈 Market Intelligence","How you stack up against 2026 hiring data — computed, not guessed.")
+    ph("📈 Market Intelligence","Market benchmark based on prototype dataset · Skills weighted by role demand · Not live job board data.")
     st.markdown('<div style="padding:0 28px;">',unsafe_allow_html=True)
     cs("Select Target Role")
     ca,cb=st.columns([2,1])
@@ -1633,21 +2360,28 @@ elif page=="💬  Career Chat":
     st.markdown('<div style="padding:0 28px;">',unsafe_allow_html=True)
 
     user_context = ""
-    if st.session_state.resume_skills or st.session_state.github_skills:
-        all_skills = list(set((st.session_state.resume_skills or []) + (st.session_state.github_skills or [])))
-        user_context += f"User skills: {', '.join(all_skills[:12])}\n"
     if st.session_state.ats_score is not None:
         user_context += f"ATS Score: {st.session_state.ats_score}/100\n"
     if st.session_state.portfolio:
         user_context += f"Portfolio Score: {st.session_state.portfolio['portfolio_score']}/100\n"
     if st.session_state.reality_check:
         user_context += f"Credibility Score: {st.session_state.reality_check['score']}%\n"
-        if st.session_state.reality_check.get("unverified"):
-            user_context += f"Skills lacking GitHub evidence: {', '.join(st.session_state.reality_check['unverified'][:5])}\n"
     if st.session_state.get("market_readiness"):
         user_context += f"Market Readiness: {st.session_state.market_readiness['score']}%\n"
-        gaps = [s for s,_ in st.session_state.market_readiness['priority_gaps'][:3]]
-        if gaps: user_context += f"Top skill gaps: {', '.join(gaps)}\n"
+    # Use Skill Matrix for rich, specific context
+    if st.session_state.get("skill_matrix") and st.session_state.get("gap_priorities"):
+        sm = st.session_state.skill_matrix
+        confirmed = [k for k,v in sm.items() if v["confidence"] in ("Confirmed","Strong")]
+        partial = [k for k,v in sm.items() if v["confidence"] == "Partial" and v["resume"]]
+        critical = [g["skill"] for g in st.session_state.gap_priorities if g["priority_label"] in ("Critical","High")][:4]
+        if confirmed: user_context += f"Confirmed skills (resume+GitHub): {', '.join(confirmed[:8])}\n"
+        if partial: user_context += f"Claimed but no GitHub evidence: {', '.join(partial[:5])}\n"
+        if critical: user_context += f"Critical gaps (market demand × role fit): {', '.join(critical)}\n"
+    elif st.session_state.resume_skills or st.session_state.github_skills:
+        all_skills = list(set((st.session_state.resume_skills or []) + (st.session_state.github_skills or [])))
+        user_context += f"Known skills: {', '.join(all_skills[:12])}\n"
+        if st.session_state.reality_check and st.session_state.reality_check.get("unverified"):
+            user_context += f"Unverified claims: {', '.join(st.session_state.reality_check['unverified'][:5])}\n"
 
     if user_context:
         st.markdown(f'''
