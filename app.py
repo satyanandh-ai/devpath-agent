@@ -471,14 +471,18 @@ def build_skill_matrix(
                 "file":     ev.get("type", "").replace("file:", ""),
                 "detail":   ev.get("detail", ""),
                 "strength": gh_strength,
-                "url":      ev.get("url", "")
+                "url":      ev.get("url", ""),
+                "is_file":  ev.get("type","").startswith("file:"),
             })
 
         matrix[skill] = {
             # ── Evidence (Phase 1 — what we found) ───────────────────
             "resume":           resume_has,
             "github_strength":  gh_strength,
-            "github_evidence":  gh_evidence_items,
+            "github_evidence":  sorted(
+                gh_evidence_items,
+                key=lambda e: (0 if e.get("type","").startswith("file:") else 1)
+            )[:10],  # prioritize file evidence, keep up to 10
             "github_repos":     gh_repos,
             "evidence_level":   evidence_level,    # Confirmed/Strong/Partial/Weak/Not Found
             "evidence_reason":  evidence_reason,   # Human-readable explanation
@@ -2024,12 +2028,34 @@ elif page=="💼  Job Match":
     jd=st.text_area("JD",height=150,placeholder="Paste full job description here...",label_visibility="collapsed")
     if st.session_state.resume_skills and jd.strip() and st.button("💼 Run Job Match"):
         with st.spinner("Extracting JD requirements..."):
-            jd_skills=extract_skills_llm(jd,"job description")
+            jd_skills = extract_skills_llm(jd, "job description")
+
         with st.spinner("Computing match..."):
-            overlap=compute_overlap(jd_skills,st.session_state.resume_skills)
-            overlap["plan"]=ask_llm(f"JD requires:{jd_skills}\nResume has:{st.session_state.resume_skills}\nMissing:{overlap['unverified']}\nWrite specific 2-week prep plan.")
-            overlap["jd_skills"]=jd_skills; st.session_state.job_match=overlap
-        log_activity("Job Match done","💼"); st.success("✅ Done!")
+            # Use Skill Matrix for richer evidence if available
+            if st.session_state.get("skill_matrix"):
+                sm = st.session_state.skill_matrix
+                # Map JD skills through canonical normalization
+                jd_canonical = [normalize_skill(s) for s in jd_skills]
+                verified   = [s for s in jd_skills if normalize_skill(s) in sm and sm[normalize_skill(s)]["readiness"] >= 45]
+                unverified = [s for s in jd_skills if normalize_skill(s) not in sm or sm[normalize_skill(s)]["readiness"] < 45]
+                extra      = []
+                score      = round((len(verified) / len(jd_skills)) * 100) if jd_skills else 0
+                overlap    = {"verified": verified, "unverified": unverified,
+                              "extra": extra, "score": score, "jd_skills": jd_skills,
+                              "source": "Skill Matrix"}
+            else:
+                overlap = compute_overlap(jd_skills, st.session_state.resume_skills)
+                overlap["jd_skills"] = jd_skills
+                overlap["source"] = "Resume Skills"
+
+            overlap["plan"] = ask_llm(
+                f"JD requires: {jd_skills}\nCandidate has: {st.session_state.resume_skills}\n"
+                f"Missing: {overlap['unverified']}\nWrite a specific 2-week prep plan."
+            )
+            st.session_state.job_match = overlap
+
+        log_activity("Job Match done","💼")
+        st.success(f"✅ Done! (matched via {overlap.get('source','compute_overlap')})")
     ce()
     if st.session_state.job_match:
         jm=st.session_state.job_match
@@ -2163,15 +2189,31 @@ elif page=="🗺️  Career Roadmap":
         if "error" in gdata: st.error(gdata["error"])
         else:
             with st.spinner("Computing..."):
-                rsr=ask_llm(f"List top 8-10 skills for '{goal}' in 2026. Comma-separated only.")
-                known=set((st.session_state.github_skills or [])+(st.session_state.resume_skills or [])+[l.lower() for l in gdata.get("languages",[])])
-                rs=[s.strip().lower() for s in rsr.split(",") if s.strip()]
-                cov={}
-                for r in rs:
-                    if r in known: cov[r]=100
-                    elif any(r in k or k in r for k in known): cov[r]=50
-                    else: cov[r]=0
-                st.session_state.skill_coverage=cov
+                rsr = ask_llm(f"List top 8-10 skills for '{goal}' in 2026. Comma-separated only.")
+                rs = [normalize_skill(s.strip()) for s in rsr.split(",") if s.strip()]
+
+                # Use Skill Matrix for readiness if available — otherwise fallback
+                if st.session_state.get("skill_matrix"):
+                    sm = st.session_state.skill_matrix
+                    cov = {}
+                    for skill in rs:
+                        if skill in sm:
+                            cov[skill] = sm[skill]["readiness"]
+                        else:
+                            # Not in matrix — check known skills set
+                            known = set((st.session_state.github_skills or []) +
+                                        (st.session_state.resume_skills or []))
+                            cov[skill] = 50 if any(normalize_skill(k)==skill for k in known) else 0
+                else:
+                    known = set((st.session_state.github_skills or []) +
+                                (st.session_state.resume_skills or []) +
+                                [l.lower() for l in gdata.get("languages", [])])
+                    cov = {}
+                    for skill in rs:
+                        if skill in known: cov[skill] = 100
+                        elif any(normalize_skill(k) == skill for k in known): cov[skill] = 50
+                        else: cov[skill] = 0
+                st.session_state.skill_coverage = cov
                 st.session_state.roadmap=ask_llm(f"Skills:{list(known)}\nTarget:{goal}\nRequired:{rsr}\nGive:\n1. SKILLS ALREADY HELD\n2. SKILL GAPS\n3. 30-60-90 day numbered checklist (short specific items)\n4. TODAY first step")
             log_activity(f"Roadmap: {goal}","🗺️"); st.success("✅ Done!")
     ce()
@@ -2252,9 +2294,18 @@ elif page=="🎤  Interview Prep":
     with c1: tr=st.text_input("Target Role",placeholder="e.g. AI Engineer")
     with c2: diff=st.selectbox("Difficulty",["Beginner","Intermediate","Advanced"])
     if st.button("🎤 Generate Questions") and tr.strip():
-        with st.spinner("🔍 Retrieving interview questions from database..."):
-            known=list(set((st.session_state.github_skills or [])+(st.session_state.resume_skills or [])))
+        # Use Skill Matrix for richer context if available
+        if st.session_state.get("skill_matrix") and st.session_state.get("gap_priorities"):
+            sm = st.session_state.skill_matrix
+            confirmed = [k for k,v in sm.items() if v.get("evidence_level","") in ("Confirmed","Strong")]
+            gaps = [g["skill"] for g in st.session_state.gap_priorities[:3]]
+            known = confirmed[:8]
+            known_context = f"Confirmed skills: {', '.join(confirmed[:6])}. Key gaps: {', '.join(gaps)}"
+        else:
+            known = list(set((st.session_state.github_skills or [])+(st.session_state.resume_skills or [])))
+            known_context = f"Skills: {', '.join(known[:10])}"
 
+        with st.spinner("🔍 Retrieving interview questions from database..."):
             rag_questions = []
             if RAG_AVAILABLE:
                 try:
@@ -2327,13 +2378,20 @@ Q2: ...""")
 elif page=="🔍  Opportunities":
     ph("🔍 Opportunities","Real search links built from your skills.")
     st.markdown('<div style="padding:0 28px;">',unsafe_allow_html=True)
-    skills=st.session_state.resume_skills or st.session_state.github_skills or []
+    # Prefer confirmed skills from Skill Matrix for better search quality
+    if st.session_state.get("skill_matrix"):
+        sm = st.session_state.skill_matrix
+        confirmed = [k for k,v in sm.items() if v.get("evidence_level","") in ("Confirmed","Strong")]
+        skills = confirmed or st.session_state.resume_skills or st.session_state.github_skills or []
+    else:
+        skills = st.session_state.resume_skills or st.session_state.github_skills or []
+
     if not skills:
         st.warning("Run Resume Intelligence or GitHub Analysis first.")
     else:
-        query="+".join(skills[:5])
-        pl=(st.session_state.github_data or {}).get("languages",["python"])
-        pl=pl[0].lower() if pl else "python"
+        query = "+".join(skills[:5])
+        pl = (st.session_state.github_data or {}).get("languages", ["python"])
+        pl = pl[0].lower() if pl else "python"
         cs("🎯 Best-Fit Role Recommendations")
         if st.button("✨ Generate Recommendations"):
             with st.spinner("Analyzing..."):
