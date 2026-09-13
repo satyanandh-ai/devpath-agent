@@ -1,811 +1,308 @@
-# DevPath — Agentic Career Intelligence
+<div align="center">
 
-> **An agentic AI system that analyzes a candidate's evidence, identifies the highest-impact career gap, takes action, evaluates progress, and adapts the plan.**
+# ⚡ DevPath
+## AI Career Intelligence Platform
 
-<p align="center">
+**Observe → Decide → Act → Evaluate → Adapt**
 
-**Observe · Decide · Act · Evaluate · Adapt**
+[![Live Demo](https://img.shields.io/badge/🚀_Live_Demo-devpath--agent--satya.streamlit.app-E91E63?style=for-the-badge)](https://devpath-agent-satya.streamlit.app)
+[![GitHub](https://img.shields.io/badge/GitHub-satyanandh--ai-181717?style=for-the-badge&logo=github)](https://github.com/satyanandh-ai/devpath-agent)
 
-</p>
-
-<p align="center">
-  <a href="https://devpath-agent-satya.streamlit.app/">Live Demo</a> ·
-  <a href="https://github.com/satyanandh-ai/devpath-agent">Source Code</a>
-</p>
+*Agentic Arena 2026 · Ch. Satyanand · B.Tech AI/ML · ALIET Vijayawada*
 
 ---
 
-## Overview
+> **"DevPath doesn't just analyze your resume.**
+> **It analyzes you against the market — then acts on the gaps."**
 
-Most career platforms give users information.
+</div>
 
-**DevPath helps decide what to do next.**
+---
 
-DevPath combines resume evidence, GitHub activity, job-market requirements, retrieval-augmented knowledge, and agentic reasoning to create a personalized career strategy.
+## 🎯 The Problem DevPath Solves
 
-Instead of producing a one-time recommendation, DevPath is designed around a closed-loop workflow:
+Every career tool gives you generic advice.
 
-```text
-User Goal
-   ↓
-Observe
-   ↓
-Decide
-   ↓
-Act
-   ↓
-Evaluate
-   ↓
-Adapt
-   ↺
+DevPath gives you **evidence-backed intelligence**:
+
+- ❌ Resume says Docker → ✅ GitHub has zero Docker evidence → **Credibility: Partial**
+- ❌ Market needs AWS at 54% → ✅ You don't have it → **Priority Gap: High**
+- ❌ Job Match says 80% → ✅ Weighted by evidence depth → **Actual Match: 63%**
+
+---
+
+## 🖼️ DevPath in Action
+
+### 🏠 Career Intelligence Dashboard
+
+![DevPath Dashboard showing Career Readiness 74, Portfolio 65, ATS 90, Credibility 67, Job Match 80 with Market Readiness 86% donut chart and skill demand comparison](https://github.com/satyanandh-ai/devpath-agent/assets/dashboard-preview.png)
+
+> **Real scores from a real resume — no inflation:**
+> - 🎯 DevPath Score: **74/100** · Industry Ready
+> - 📊 Portfolio: **65** · ATS: **90** · Credibility: **67** · Job Match: **80**
+> - 📈 Market Readiness: **86%** (8/10 skills matched)
+> - 🔴 Priority Gaps: **AWS 54%** · **Kubernetes 42%**
+> - 💚 Top Strengths: Python · Git · LangChain · LLM Integration
+
+---
+
+### 📄 Resume Intelligence — Real ATS Engine
+
+![Resume Intelligence page showing ATS Score 90/100 with breakdown: Contact 20/20, Sections 20/20, Skills 20/20, Keywords 10/20, Formatting 17/20](https://github.com/satyanandh-ai/devpath-agent/assets/resume-preview.png)
+
+> **5-category computed engine. No LLM guessing. Max score: 92.**
+
+| Category | Score | What it checks |
+|---|---|---|
+| Contact Info | 20/20 ✅ | Email · Phone · LinkedIn · GitHub |
+| Resume Sections | 20/20 ✅ | Summary · Education · Skills · Projects · Experience |
+| Skills Coverage | 20/20 ✅ | Tiered scoring — 15+ keywords = 20pts |
+| Keywords & Verbs | 10/20 ⚠️ | Action verbs · quantified achievements |
+| Formatting & Length | 17/20 ✅ | Word count · bullets · dates · headers |
+| **Total** | **90/100** | **Strong** |
+
+---
+
+### 💬 Personalized Career Chat
+
+![Career Chat showing personalized answer to Am I ready for AI Engineer with specific scores, skill gaps Docker AWS Kubernetes and actionable recommendations](https://github.com/satyanandh-ai/devpath-agent/assets/chat-preview.png)
+
+> **Every answer uses your actual profile — not generic ChatGPT advice.**
+
+When asked *"Am I ready for AI Engineer?"* DevPath responds with:
+
 ```
+✅ ATS Score: 90/100 — strong technical proficiency
+⚠️ Portfolio: 65/100 — need more deployed projects
 
-The system continuously uses the candidate's evidence and evaluation results to determine the next highest-value action.
+Skills lacking GitHub evidence:
+  • Docker  • AWS  • Kubernetes
 
----
-
-# The Problem
-
-Students and early-career developers often have career information scattered across multiple places:
-
-* Resume
-* GitHub
-* Job descriptions
-* Learning resources
-* Interview preparation
-* Personal projects
-
-This creates a critical gap:
-
-> **A candidate may claim a skill on their resume without having enough evidence to demonstrate it.**
-
-At the same time, even when a candidate knows their weaknesses, they often do not know:
-
-* Which gap matters most?
-* Which skill should be improved first?
-* What action will have the highest impact?
-* Does the action actually improve their readiness?
-* What should they do if the first plan is insufficient?
-
-DevPath brings these signals together and turns them into an **adaptive career decision system**.
-
----
-
-# Why Agentic AI?
-
-A conventional career assistant might work like this:
-
-```text
-Profile → LLM → Recommendation
-```
-
-That produces an answer, but the system stops there.
-
-DevPath is designed as a goal-driven workflow:
-
-```text
-                  USER GOAL
-                      │
-                      ▼
-                   OBSERVE
-          ┌───────────┼───────────┐
-          │           │           │
-          ▼           ▼           ▼
-       Resume       GitHub      Market
-          │           │           │
-          └───────────┼───────────┘
-                      ▼
-                    DECIDE
-                      │
-                      ▼
-                GAP PRIORITIZATION
-                      │
-                      ▼
-                     ACT
-          ┌───────────┼───────────┐
-          │           │           │
-          ▼           ▼           ▼
-        Skill      Project       Job
-        Action      Action      Action
-          │           │           │
-          └───────────┼───────────┘
-                      ▼
-                  EVALUATE
-                      │
-              ┌───────┴───────┐
-              │               │
-             DONE            REPLAN
-                              │
-                              ▼
-                            ADAPT
-                              │
-                              └──────► DECIDE
-```
-
-The important part is the **feedback loop**.
-
-The evaluator can determine whether the current strategy is sufficient. If it is not, the system can identify the next priority and replan.
-
----
-
-# Agentic Workflow
-
-## 1. Observe
-
-DevPath collects and analyzes available evidence:
-
-* Resume
-* GitHub profile
-* Repository information
-* Skill evidence
-* Target role
-* Market requirements
-* Retrieved career knowledge
-
-The system builds a structured view of the candidate.
-
----
-
-## 2. Decide
-
-The system identifies and prioritizes the most important skill gaps.
-
-Rather than simply listing every missing skill, DevPath uses a **Gap Priority Engine** to determine which gaps deserve attention first.
-
-The system can consider:
-
-* Current evidence
-* Target evidence level
-* Market demand
-* Job-match impact
-* Potential improvement
-
----
-
-## 3. Act
-
-The Action Planner converts the selected gap into a concrete next action.
-
-Possible actions include:
-
-* Build a targeted project
-* Strengthen a technical skill
-* Improve portfolio evidence
-* Prepare for an interview topic
-* Improve deployment experience
-* Target a relevant role
-
-The objective is to move from **career advice** to **career action**.
-
----
-
-## 4. Evaluate
-
-After planning an action, DevPath evaluates the candidate's current state.
-
-The evaluator considers:
-
-* Goal achievement
-* Readiness
-* Remaining gaps
-* Evidence
-* Recommended next focus
-
-The result determines whether the system should finish or continue.
-
-```text
-Goal Achieved?
-     │
- ┌───┴───┐
-YES      NO
- │        │
-DONE    REPLAN
+Market Readiness: 86% — close to ready
+Priority action: Deploy 1 project on AWS this week
 ```
 
 ---
 
-## 5. Adapt
+## 🏗️ Agentic Architecture
 
-If the goal has not been achieved, DevPath can continue the workflow with a new priority.
-
-This is the key difference between a static roadmap and an adaptive agentic system.
-
-```text
-Evaluate
-   ↓
-Not sufficient
-   ↓
-Identify remaining bottleneck
-   ↓
-Replan
-   ↓
-New action
-   ↓
-Evaluate again
+```
+                      USER CAREER GOAL
+                             │
+                    ┌────────▼────────┐
+                    │    PLANNER      │  LangGraph Supervisor
+                    └────────┬────────┘
+                             │
+          ┌──────────────────┼──────────────────┐
+          ▼                  ▼                  ▼
+   RESUME AGENT        GITHUB AGENT         RAG ENGINE
+   ─────────────       ────────────         ──────────
+   ATS Scoring         Portfolio            4 Collections:
+   Skill Extract       Evidence Map         • Jobs (20)
+   Structured          Deep Repo            • Interview (25)
+   Analysis            Inspection           • Learning (18)
+                                            • Career KB (15)
+          └──────────────────┼──────────────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  SKILL MATRIX   │  Central Source of Truth
+                    │                 │  Confirmed/Strong/
+                    │  Resume ↔ GitHub│  Partial/Weak/Not Found
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  GAP PRIORITY   │  role × market × gap × evidence
+                    │    ENGINE       │
+                    └────────┬────────┘
+                             │
+               ┌─────────────┼─────────────┐
+               ▼             ▼             ▼
+          JOB AGENT    ACTION PLANNER   EVALUATOR
+          ──────────   ─────────────   ─────────
+          Weighted     30-60-90 Day    Goal met?
+          Evidence     Concrete Steps
+          Scoring
+               └─────────────┼─────────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              ▼                             ▼
+         ✅ DONE                      🔄 REPLAN
+         Goal achieved                Act again
 ```
 
 ---
 
-# Architecture
+## 🔬 Skill Evidence Engine
 
-DevPath uses a **LangGraph-based agentic workflow** to coordinate specialized capabilities while maintaining structured state.
+The single source of truth every DevPath module reads from:
 
-```text
-                         ┌─────────────────┐
-                         │    USER GOAL    │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │    SUPERVISOR   │
-                         │    LangGraph    │
-                         └────────┬────────┘
-                                  │
-              ┌───────────────────┼───────────────────┐
-              ▼                   ▼                   ▼
-       ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-       │ Resume      │     │ GitHub      │     │ Job /       │
-       │ Intelligence│     │ Intelligence│     │ Market      │
-       └──────┬──────┘     └──────┬──────┘     └──────┬──────┘
-              │                   │                   │
-              └───────────────────┼───────────────────┘
-                                  ▼
-                         ┌─────────────────┐
-                         │  Skill Matrix   │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │ Gap Priority    │
-                         │ Engine          │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │ Action Planner  │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │    Evaluator    │
-                         └────────┬────────┘
-                                  │
-                         ┌────────┴────────┐
-                         ▼                 ▼
-                       DONE              REPLAN
-                                           │
-                                           └──────► Supervisor
+```python
+skill_matrix["docker"] = {
+    "evidence_level":  "Partial",
+    "evidence_reason": "Resume mention only — no GitHub Dockerfile found",
+    "evidence_trace":  [
+        {"source": "Resume", "detail": "Listed in skills section"},
+        # No GitHub evidence
+    ],
+    "readiness":       45,    # computed from evidence alone
+    "market_demand":   65,    # % of AI Engineer job postings
+    "github_repos":    [],    # traceable — none found
+}
+```
+
+### 5 Evidence Levels — Standardized Across All Modules
+
+| Level | Meaning | Example |
+|---|---|---|
+| ✅ **Confirmed** | Resume + GitHub file evidence | Dockerfile found in repo |
+| ✅ **Strong** | Resume + GitHub README/metadata | Mentioned in README |
+| ⚠️ **Partial** | Resume only — no GitHub proof | Listed in skills, no project |
+| 🟠 **Weak** | GitHub only — not on resume | Found in repo, not claimed |
+| ❌ **Not Found** | No evidence anywhere | Completely missing |
+
+---
+
+## 🌉 Reality Check — Resume ↔ GitHub Credibility
+
+> The feature most career tools don't have.
+
+```
+Skill          Resume    GitHub Evidence         Level
+────────────────────────────────────────────────────────
+Python         ✅        ✅ 5 repos              Confirmed
+FastAPI        ✅        ✅ requirements.txt     Confirmed
+LangChain      ✅        ✅ devpath-agent repo   Confirmed
+Docker         ✅        ❌ No Dockerfile found  Partial
+AWS            ✅        ❌ No boto3/S3 found    Partial
+Kubernetes     ✅        ❌ No k8s config found  Partial
+
+Credibility Score: 67%
+Hidden Strengths (GitHub but not on Resume): ChromaDB · Groq
 ```
 
 ---
 
-# Agent State
+## 🔬 Evidence Simulator
 
-The agentic workflow maintains structured state across the execution cycle:
+> *"What happens to my Job Match if I Dockerize my project?"*
+> **Deterministic projection — no AI estimation.**
 
-```text
-goal
-resume_analysis
-github_analysis
-skill_gaps
-job_matches
-action_plan
-evaluation
-iteration
-status
-next_agent
 ```
-
-This allows information produced during one stage to influence subsequent decisions instead of treating every model call as an isolated request.
-
----
-
-# Core Intelligence Engines
-
-## Resume Intelligence
-
-Analyzes the candidate's resume for:
-
-* Skills
-* Keywords
-* Resume quality
-* Role alignment
-* Improvement opportunities
-* ATS-oriented signals
-
----
-
-## GitHub Evidence Engine
-
-Analyzes real development evidence from GitHub.
-
-It can inspect signals such as:
-
-* Repositories
-* Programming languages
-* README quality
-* Project structure
-* Dependencies
-* Docker/deployment evidence
-* Repository activity
-
-The goal is to understand what the candidate has **actually demonstrated**, not only what they claim.
-
----
-
-## Resume ↔ GitHub Reality Check
-
-One of DevPath's core ideas is comparing:
-
-```text
-Resume Claims
-      ↕
-GitHub Evidence
-```
-
-Example:
-
-```text
-Python       → Strong evidence
-FastAPI      → Strong evidence
-LangChain    → Demonstrated
-Docker       → Limited evidence
-AWS          → No evidence
-```
-
-This helps identify the difference between:
-
-**"I listed the skill."**
-
-and
-
-**"I have evidence that demonstrates the skill."**
-
----
-
-# Skill Evidence Engine
-
-DevPath uses a structured skill taxonomy and evidence model to represent candidate capability.
-
-Evidence can be evaluated across multiple levels, allowing the system to distinguish between a skill that is merely mentioned and one that is supported by stronger portfolio evidence.
-
-This evidence model feeds the:
-
-* Skill Matrix
-* Gap Priority Engine
-* Evidence Simulator
-* Career evaluation
-
----
-
-# Gap Priority Engine
-
-Not every skill gap has the same value.
-
-DevPath prioritizes gaps using available evidence and market information rather than simply asking an LLM to rank skills.
-
-The system can estimate the potential value of improving a skill by simulating an evidence upgrade and comparing the resulting change in:
-
-* Job-match potential
-* Evidence strength
-* Overall readiness
-
-This helps answer:
-
-> **"Which improvement is worth doing first?"**
-
----
-
-# Market Intelligence
-
-DevPath connects candidate capability with role requirements.
-
-It can surface:
-
-* Target-role requirements
-* Skill demand
-* Job-match signals
-* Market priorities
-* Emerging skills
-* Career opportunities
-
-The purpose is to prevent users from following a roadmap that is disconnected from the roles they actually want.
-
----
-
-# Retrieval-Augmented Generation
-
-DevPath includes a RAG layer for retrieving relevant career knowledge.
-
-```text
-Career Knowledge
-      │
-      ▼
-Document Ingestion
-      │
-      ▼
-Chunking
-      │
-      ▼
-Embeddings
-      │
-      ▼
-Vector Retrieval
-      │
-      ▼
-Relevant Context
-      │
-      ▼
-Agent Reasoning
-```
-
-The retrieval layer can provide context for:
-
-* Career guidance
-* Skills
-* Roles
-* Interview preparation
-* Learning resources
-
-The retrieved context is used alongside the candidate's profile rather than relying only on the model's internal knowledge.
-
----
-
-# Evidence Simulation
-
-DevPath includes a deterministic **what-if analysis** capability.
-
-Instead of asking:
-
-> "Would learning Docker help?"
-
-the system can simulate an evidence upgrade and estimate how that change could affect candidate signals.
-
-Conceptually:
-
-```text
-Current Evidence
-      ↓
-Simulate Skill Upgrade
-      ↓
-Compare Before / After
-      ↓
-Estimate Impact
-```
-
-This allows the action planner to prefer potentially higher-value interventions.
-
----
-
-# Interview Coach
-
-DevPath also supports personalized interview preparation.
-
-It can provide:
-
-* Role-specific questions
-* Candidate-focused practice
-* Answer evaluation
-* Feedback
-* Improvement guidance
-
-Interview preparation is informed by the broader career profile rather than being completely independent of it.
-
----
-
-# Application Experience
-
-DevPath is organized as a multi-page Streamlit application with dedicated career intelligence workflows.
-
-The current application includes capabilities for:
-
-* Career dashboard
-* Resume analysis
-* GitHub analysis
-* Skill evidence
-* Market intelligence
-* Career intelligence
-* RAG knowledge
-* Agentic Mode
-* Interview preparation
-* Reports and visualizations
-
-The **Agentic Mode** exposes the execution process so users can see the workflow rather than receiving only a final recommendation.
-
----
-
-# Technology Stack
-
-| Layer                  | Technology                |
-| ---------------------- | ------------------------- |
-| Language               | Python                    |
-| Frontend               | Streamlit                 |
-| Agent Orchestration    | LangGraph                 |
-| LLM Framework          | LangChain                 |
-| LLM Provider           | Groq                      |
-| Retrieval              | ChromaDB                  |
-| GitHub Analysis        | GitHub API                |
-| Embeddings / Retrieval | FastEmbed / Vector Search |
-| Visualization          | Plotly                    |
-| Reports                | ReportLab                 |
-| Deployment             | Streamlit Cloud           |
-
----
-
-# Project Structure
-
-```text
-devpath-agent/
-│
-├── app.py
-│   ├── Skill Evidence Engine
-│   ├── GitHub Evidence Engine
-│   ├── ATS Engine
-│   ├── Skill Matrix
-│   ├── Gap Priority Engine
-│   ├── Evidence Simulator
-│   ├── RAG Engine
-│   ├── LangGraph Agent Loop
-│   └── Streamlit UI
-│
-├── agent.py
-│   └── Agent / tool components
-│
-├── rag_engine.py
-│   └── Standalone RAG engine
-│
-├── requirements.txt
-├── .env.example
-├── .gitignore
-├── tests/
-└── README.md
+Skill: Docker · Partial → Strong
+
+                   BEFORE    AFTER    DELTA
+Job Match:          55%  →   63%    +8%
+Evidence Score:     45   →   75     +30pts
+Overall Evidence:   48   →   52     +4pts
+
+Action: Add Dockerfile to devpath-agent repo
+Output: 1 GitHub file → Evidence level: Strong
 ```
 
 ---
 
-# Example Agent Run
+## 📊 Market Intelligence
 
-### Goal
+> Hybrid C+A: Computed database for scores + LLM for explanations.
 
-```text
-Become job-ready for an AI Engineer internship.
-```
+| Role | Demand | India Salary | US Salary |
+|---|---|---|---|
+| GenAI Engineer | 🔥 Extremely High ↑120% | ₹12L–₹35L | $110K–$200K |
+| MLOps Engineer | 🔥 Very High ↑58% | ₹10L–₹28L | $100K–$170K |
+| AI Engineer | 🔥 Very High ↑42% | ₹8L–₹24L | $90K–$160K |
+| ML Engineer | ✅ High ↑31% | ₹7L–₹20L | $85K–$150K |
+| Data Scientist | ✅ High ↑18% | ₹6L–₹18L | $80K–$140K |
 
-### Observe
-
-```text
-Resume
- ├── Python
- ├── FastAPI
- └── LangChain
-
-GitHub
- ├── AI projects
- ├── Python repositories
- └── Limited deployment evidence
-
-Market
- ├── Docker
- ├── Cloud
- └── MLOps
-```
-
-### Decide
-
-```text
-Highest-priority gap:
-Deployment evidence
-```
-
-### Act
-
-```text
-Build and deploy an AI application
-with production-style deployment.
-```
-
-### Evaluate
-
-```text
-Goal achieved?
-NO
-
-Remaining bottleneck:
-Cloud deployment evidence
-```
-
-### Adapt
-
-```text
-Replan:
-Prioritize cloud deployment next.
-```
-
-### Result
-
-```text
-The roadmap changes based on evaluation.
-```
-
-That is the core behavior DevPath is designed to demonstrate:
-
-> **The system does not stop at analysis. It uses evaluation to determine what should happen next.**
+*Source: Prototype dataset curated from LinkedIn/Glassdoor/Naukri Q1–Q3 2026*
 
 ---
 
-# Quick Start
+## 🤖 Agentic Mode — LangGraph Loop
 
-## 1. Clone the repository
+```
+Goal: "Get AI Engineer internship in 3 months"
+
+[Resume Agent]   → ATS: 90 | Skills: Python, LangChain, RAG, FastAPI
+[GitHub Agent]   → Portfolio: 65 | Gaps: Docker, AWS, CI/CD
+[Gap Analyzer]   → Critical: AWS (54%) | Important: Kubernetes (42%)
+[Job Agent]      → Match: 80% weighted | Missing: AWS, K8s
+[Action Planner] → Week 1: Dockerize project → Evidence: Partial→Strong
+                   Week 2: Deploy FastAPI to AWS EC2
+                   Week 3: Add GitHub Actions CI/CD
+[Evaluator]      → Readiness: 72% | Recommendation: REPLAN
+     ↓
+[REPLAN] Focus: Docker → target Strong evidence → rerun loop
+```
+
+---
+
+## 🚀 Tech Stack
+
+| Layer | Technology | Role |
+|---|---|---|
+| **Agent Loop** | LangGraph | Observe→Decide→Act→Evaluate→Adapt |
+| **LLM** | Groq (`openai/gpt-oss-20b`) | Sub-second inference |
+| **Orchestration** | LangChain | Tools · chains · agents |
+| **RAG** | ChromaDB (in-memory) | 4-collection knowledge base |
+| **ATS Engine** | Custom (5-rule) | Deterministic scoring |
+| **Skill Engine** | Canonical taxonomy | Single source of truth |
+| **PDF** | pypdf | Resume extraction |
+| **Charts** | Plotly | Radar · bar · donut |
+| **Reports** | ReportLab | PDF career reports |
+| **UI** | Streamlit + CSS | Pink glass dashboard |
+| **Deployment** | Streamlit Cloud | Live, zero-config |
+
+---
+
+## ⚡ Quick Start
 
 ```bash
+# Clone
 git clone https://github.com/satyanandh-ai/devpath-agent.git
 cd devpath-agent
-```
 
-## 2. Create a virtual environment
-
-### Windows
-
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-```
-
-### macOS / Linux
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-## 3. Install dependencies
-
-```bash
+# Install
 pip install -r requirements.txt
-```
 
-## 4. Configure environment variables
+# Configure
+echo 'GROQ_API_KEY="your_key"' > .env
+echo 'GITHUB_TOKEN="your_token"' >> .env
 
-Create a `.env` file using `.env.example`.
-
-Example:
-
-```env
-GROQ_API_KEY=your_api_key_here
-GITHUB_TOKEN=your_token_here
-```
-
-Only configure the credentials required by your selected workflows.
-
-## 5. Run the application
-
-```bash
+# Run
 streamlit run app.py
 ```
 
----
-
-# Security
-
-**Never commit secrets to GitHub.**
-
-Do not commit:
-
-```text
-.env
-API keys
-Access tokens
-Passwords
-Private credentials
+**Streamlit Cloud Secrets:**
+```toml
+GROQ_API_KEY = "gsk_..."
+GITHUB_TOKEN = "github_pat_..."
 ```
 
-Use `.env` locally and keep secrets outside source control.
+---
+
+## 🏆 Why DevPath Wins
+
+| | Other Tools | DevPath |
+|---|---|---|
+| Resume Score | LLM opinion | 5-rule deterministic engine |
+| Skill Proof | Resume claim | Resume + GitHub evidence |
+| Gap Priority | Generic list | role × market × evidence formula |
+| Job Match | Binary yes/no | Weighted evidence (0.0–1.0) |
+| Market Data | Vague trends | Role-specific demand % database |
+| Career Chat | Generic tips | Uses your actual scores |
+| Agent Loop | Single LLM call | LangGraph observe→adapt loop |
+| What-if | Not possible | Evidence Simulator (deterministic) |
 
 ---
 
-# Live Demo
+<div align="center">
 
-🚀 **Web Application**
+**⚡ DevPath · Agentic Arena 2026**
 
-https://devpath-agent-satya.streamlit.app/
+**Ch. Satyanand · B.Tech AI/ML · ALIET Vijayawada**
 
-💻 **Source Code**
+[![Live Demo](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://devpath-agent-satya.streamlit.app)
 
-https://github.com/satyanandh-ai/devpath-agent
+*Built with LangGraph · LangChain · Groq · ChromaDB · Streamlit*
 
----
-
-# Design Principles
-
-### Evidence over claims
-
-Skills should be supported by meaningful evidence whenever possible.
-
-### Goal over generic advice
-
-Recommendations should be connected to a defined career objective.
-
-### Action over information
-
-The system should identify what the candidate can actually do next.
-
-### Evaluation over one-shot generation
-
-The system should evaluate progress instead of assuming the first plan is correct.
-
-### Adaptation over static roadmaps
-
-When priorities change, the plan should be able to change with them.
-
----
-
-# Why DevPath?
-
-Traditional tools often solve one part of the career problem:
-
-| Capability           | Traditional Approach    | DevPath                       |
-| -------------------- | ----------------------- | ----------------------------- |
-| Resume               | Resume scoring          | Resume Intelligence           |
-| Portfolio            | Manual GitHub review    | GitHub Evidence Engine        |
-| Skill validation     | Resume claims           | Resume ↔ GitHub Reality Check |
-| Skill prioritization | Generic recommendations | Gap Priority Engine           |
-| Market fit           | Job-board browsing      | Market Intelligence           |
-| Career roadmap       | Static advice           | Adaptive action planning      |
-| Evaluation           | Usually absent          | Agent evaluator               |
-| Adaptation           | Usually absent          | Replanning loop               |
-
-The central idea is simple:
-
-> **Don't just tell candidates what they are missing. Determine what matters most, take action, evaluate the result, and adapt.**
-
----
-
-# Hackathon Focus
-
-DevPath is designed to demonstrate the core properties of an agentic AI system:
-
-```text
-Observe
-   ↓
-Decide
-   ↓
-Act
-   ↓
-Evaluate
-   ↓
-Adapt
-   ↺
-```
-
-The system combines:
-
-**LangGraph + specialized tools + structured state + evidence analysis + RAG + evaluation + adaptive planning.**
-
----
-
-# 👨‍💻 Built By
-
-## Ch. Satyanand
-
-**B.Tech — Artificial Intelligence & Machine Learning**
-
-Andhra Loyola Institute of Engineering & Technology
-Vijayawada, Andhra Pradesh, India
-
-**GitHub:** https://github.com/satyanandh-ai
-
----
-
-# License
-
-This project is released under the **MIT License**.
-
----
-
-<p align="center">
-
-### DevPath
-
-**Observe. Decide. Act. Evaluate. Adapt.**
-
-</p>
+</div>
