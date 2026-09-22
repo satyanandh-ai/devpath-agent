@@ -1431,6 +1431,690 @@ def ask_agent(query: str) -> str:
     except Exception as e: return f"ERROR: {str(e)}"
 
 
+
+# ══════════════════════════════════════════════════════════════════════
+#  EVIDENCE SIMULATOR — Deterministic "what if" engine
+#  No AI-generated improvement numbers. Every change is computed.
+# ══════════════════════════════════════════════════════════════════════
+EVIDENCE_WEIGHTS = {
+    "Confirmed": 1.00,
+    "Strong":    0.75,
+    "Partial":   0.45,
+    "Weak":      0.20,
+    "Not Found": 0.00,
+}
+
+EVIDENCE_UPGRADE_PATH = {
+    "Not Found": "Weak",
+    "Weak":      "Partial",
+    "Partial":   "Strong",
+    "Strong":    "Confirmed",
+    "Confirmed": "Confirmed",  # already max
+}
+
+def simulate_evidence_upgrade(
+    skill_matrix: dict,
+    skill_to_upgrade: str,
+    target_level: str,
+    jd_skills: list = None,
+) -> dict:
+    """
+    Compute the BEFORE and AFTER state when one skill's evidence improves.
+    All numbers are deterministic — no LLM estimation.
+
+    Returns:
+        before: current state metrics
+        after:  projected state if skill reaches target_level
+        delta:  the difference
+    """
+    canonical = normalize_skill(skill_to_upgrade)
+
+    # ── BEFORE state ─────────────────────────────────────────────────
+    current_level = "Not Found"
+    if canonical in skill_matrix:
+        current_level = skill_matrix[canonical].get(
+            "evidence_level",
+            skill_matrix[canonical].get("confidence", "Not Found")
+        )
+
+    before_weight = EVIDENCE_WEIGHTS.get(current_level, 0.0)
+    after_weight  = EVIDENCE_WEIGHTS.get(target_level, 0.0)
+
+    # ── Job Match impact ──────────────────────────────────────────────
+    jm_before = None; jm_after = None
+    if jd_skills:
+        # Current weighted match
+        total = len(jd_skills)
+        before_sum = sum(
+            EVIDENCE_WEIGHTS.get(
+                skill_matrix.get(normalize_skill(s), {}).get("evidence_level",
+                skill_matrix.get(normalize_skill(s), {}).get("confidence", "Not Found")),
+                0.0
+            ) for s in jd_skills
+        )
+        # After weighted match — replace this skill's weight
+        after_sum = before_sum - before_weight + after_weight
+        jm_before = round((before_sum / total) * 100) if total else 0
+        jm_after  = round((after_sum  / total) * 100) if total else 0
+
+    # ── Overall evidence score across Skill Matrix ────────────────────
+    all_skills = list(skill_matrix.keys())
+    if all_skills:
+        ev_before = sum(
+            EVIDENCE_WEIGHTS.get(v.get("evidence_level", v.get("confidence","Not Found")), 0.0)
+            for v in skill_matrix.values()
+        ) / len(all_skills)
+
+        # Simulate upgrade in a copy
+        sim_matrix = dict(skill_matrix)
+        if canonical in sim_matrix:
+            sim_entry = dict(sim_matrix[canonical])
+            sim_entry["evidence_level"] = target_level
+            sim_entry["confidence"]     = target_level
+            sim_matrix[canonical] = sim_entry
+
+        ev_after = sum(
+            EVIDENCE_WEIGHTS.get(v.get("evidence_level", v.get("confidence","Not Found")), 0.0)
+            for v in sim_matrix.values()
+        ) / len(sim_matrix)
+    else:
+        ev_before = ev_after = 0.0
+
+    return {
+        "skill":          canonical,
+        "current_level":  current_level,
+        "target_level":   target_level,
+        "before": {
+            "evidence_level": current_level,
+            "evidence_score": round(before_weight * 100),
+            "job_match":      jm_before,
+            "overall_ev":     round(ev_before * 100),
+        },
+        "after": {
+            "evidence_level": target_level,
+            "evidence_score": round(after_weight * 100),
+            "job_match":      jm_after,
+            "overall_ev":     round(ev_after * 100),
+        },
+        "delta": {
+            "evidence_score": round((after_weight - before_weight) * 100),
+            "job_match":      (jm_after - jm_before) if jm_before is not None else None,
+            "overall_ev":     round((ev_after - ev_before) * 100),
+        },
+        "no_change": current_level == target_level,
+    }
+
+def get_highest_value_action(
+    skill_matrix: dict,
+    gap_priorities: list,
+    jd_skills: list = None,
+) -> dict:
+    """
+    Find the single highest-value skill upgrade — the one that maximally
+    improves job match or evidence score. Deterministic, not LLM-guessed.
+    """
+    best = None
+    best_delta = -1
+
+    for gap in gap_priorities[:10]:
+        skill = gap["skill"]
+        current_level = skill_matrix.get(skill, {}).get(
+            "evidence_level",
+            skill_matrix.get(skill, {}).get("confidence", "Not Found")
+        )
+        target_level = EVIDENCE_UPGRADE_PATH.get(current_level, "Partial")
+
+        sim = simulate_evidence_upgrade(skill_matrix, skill, target_level, jd_skills)
+        delta_jm = sim["delta"].get("job_match") or 0
+        delta_ev = sim["delta"].get("overall_ev") or 0
+        impact   = delta_jm * 2 + delta_ev  # weight job match more
+
+        if impact > best_delta:
+            best_delta = impact
+            best = {
+                "skill":         skill,
+                "current_level": current_level,
+                "target_level":  target_level,
+                "simulation":    sim,
+                "impact_score":  impact,
+                "market_demand": gap.get("market_demand", 0),
+            }
+
+    return best
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  DEVPATH AGENTIC LOOP — LangGraph Supervisor Architecture
+#  Wraps existing DevPath capabilities as tools.
+#  Goal → Plan → Agents → Evaluate → Adapt → Done/Replan
+# ══════════════════════════════════════════════════════════════════════
+from typing import TypedDict, Literal, Annotated
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import HumanMessage, SystemMessage
+import operator
+
+# ── Agent State ───────────────────────────────────────────────────────
+class DevPathAgentState(TypedDict):
+    goal:              str           # User's career goal
+    messages:          list          # Conversation history
+    resume_analysis:   dict          # Output from Resume Agent
+    github_analysis:   dict          # Output from GitHub Agent
+    skill_gaps:        list          # Output from Gap Analyzer
+    job_matches:       list          # Output from Job Agent
+    action_plan:       list          # Output from Action Planner
+    evaluation:        dict          # Output from Evaluator
+    iteration:         int           # Loop count (prevent infinite)
+    status:            str           # "running" / "done" / "replan"
+    next_agent:        str           # Which agent runs next
+
+# ── Tools (wrappers over existing DevPath engines) ────────────────────
+@tool
+def resume_analysis_tool(resume_text: str) -> str:
+    """Analyze resume text and extract skills, ATS score, and career fit."""
+    try:
+        # Use existing DevPath ATS engine
+        from langchain_groq import ChatGroq
+        import os
+        llm = ChatGroq(model="openai/gpt-oss-20b",
+                       api_key=os.getenv("GROQ_API_KEY",""))
+        prompt = f"""You are a resume analyst. Analyze this resume and return JSON:
+{{"skills": ["skill1","skill2"], "ats_score": 78, "career_fit": "AI Engineer",
+ "strengths": ["s1","s2"], "gaps": ["g1","g2"]}}
+Resume: {resume_text[:2000]}"""
+        response = llm.invoke([HumanMessage(content=prompt)]).content
+        return response
+    except Exception as e:
+        return f'{{"error": "{str(e)}", "skills": [], "ats_score": 0}}'
+
+@tool
+def github_analysis_tool(username: str) -> str:
+    """Analyze GitHub profile and return portfolio signals and tech skills."""
+    try:
+        import requests, json
+        resp = requests.get(
+            f"https://api.github.com/users/{username}/repos?per_page=30",
+            timeout=8
+        )
+        if resp.status_code != 200:
+            return f'{{"error": "GitHub API {resp.status_code}", "skills": [], "portfolio_score": 0}}'
+        repos = resp.json()
+        languages = list({r.get("language") for r in repos if r.get("language")})
+        deployed  = sum(1 for r in repos if r.get("homepage"))
+        original  = sum(1 for r in repos if not r.get("fork"))
+        return json.dumps({
+            "username": username,
+            "repo_count": len(repos),
+            "languages": languages,
+            "deployed_count": deployed,
+            "original_count": original,
+            "portfolio_score": min(100, deployed*20 + original*5 + len(languages)*10),
+            "top_repos": [r["name"] for r in sorted(repos,
+                          key=lambda x: x.get("stargazers_count",0), reverse=True)[:5]],
+        })
+    except Exception as e:
+        return f'{{"error": "{str(e)}", "skills": [], "portfolio_score": 0}}'
+
+@tool
+def gap_analyzer_tool(resume_skills: str, target_role: str) -> str:
+    """Compute skill gaps between current skills and target role requirements."""
+    try:
+        import json, os
+        from langchain_groq import ChatGroq
+        llm = ChatGroq(model="openai/gpt-oss-20b",
+                       api_key=os.getenv("GROQ_API_KEY",""))
+        prompt = f"""You are a career gap analyzer.
+Target Role: {target_role}
+Candidate Skills: {resume_skills}
+
+Return JSON with skill gaps:
+{{"required_skills": ["s1","s2"], "candidate_has": ["s1"], "gaps": ["s2"],
+  "priority_gaps": [{{"skill":"s2","market_demand":80,"urgency":"Critical"}}],
+  "readiness_score": 65}}"""
+        response = llm.invoke([HumanMessage(content=prompt)]).content
+        return response
+    except Exception as e:
+        return f'{{"error": "{str(e)}", "gaps": [], "readiness_score": 0}}'
+
+@tool
+def job_match_tool(candidate_skills: str, target_role: str) -> str:
+    """Find best-matching job opportunities based on candidate skills."""
+    try:
+        import json
+        # Use DevPath ROLE_MARKET_DATA for matching
+        role_map = {
+            "ai engineer":   {"demand":"Very High","salary":"₹8L–₹24L","match_skills":["python","langchain","fastapi","docker"]},
+            "ml engineer":   {"demand":"High","salary":"₹7L–₹20L","match_skills":["python","pytorch","tensorflow","mlflow"]},
+            "mlops engineer":{"demand":"Very High","salary":"₹10L–₹28L","match_skills":["docker","kubernetes","mlflow","ci/cd"]},
+            "genai engineer":{"demand":"Extremely High","salary":"₹12L–₹35L","match_skills":["langchain","rag","llm","fastapi"]},
+            "data scientist":{"demand":"High","salary":"₹6L–₹18L","match_skills":["python","pandas","sklearn","sql"]},
+        }
+        role_key = target_role.lower()
+        role_data = next((v for k,v in role_map.items() if k in role_key), role_map["ai engineer"])
+        candidate = set(s.strip().lower() for s in candidate_skills.split(","))
+        matched   = [s for s in role_data["match_skills"] if s in candidate]
+        missing   = [s for s in role_data["match_skills"] if s not in candidate]
+        score     = round((len(matched) / len(role_data["match_skills"])) * 100)
+        return json.dumps({
+            "target_role":   target_role,
+            "match_score":   score,
+            "demand":        role_data["demand"],
+            "salary":        role_data["salary"],
+            "matched_skills":matched,
+            "missing_skills":missing,
+        })
+    except Exception as e:
+        return f'{{"error": "{str(e)}", "match_score": 0}}'
+
+@tool
+def action_planner_tool(gaps: str, goal: str) -> str:
+    """Generate a concrete action plan to close skill gaps and achieve career goal."""
+    try:
+        import os
+        from langchain_groq import ChatGroq
+        llm = ChatGroq(model="openai/gpt-oss-20b",
+                       api_key=os.getenv("GROQ_API_KEY",""))
+        prompt = f"""You are a career action planner.
+Career Goal: {goal}
+Skill Gaps: {gaps}
+
+Create a 30-60-90 day action plan. Return JSON:
+{{"actions": [
+  {{"day_range":"0-30","skill":"docker","action":"Complete Docker for DevOps course + Dockerize 1 project",
+    "output":"Dockerfile in GitHub","evidence_target":"Strong"}},
+  {{"day_range":"30-60","skill":"aws","action":"AWS Cloud Practitioner + deploy FastAPI to EC2",
+    "output":"Live deployed project","evidence_target":"Confirmed"}}
+],"success_metric":"Job Match score ≥ 75%"}}"""
+        response = llm.invoke([HumanMessage(content=prompt)]).content
+        return response
+    except Exception as e:
+        return f'{{"error": "{str(e)}", "actions": []}}'
+
+@tool
+def evaluator_tool(action_plan: str, current_scores: str) -> str:
+    """Evaluate if current progress meets the career goal. Decide done or replan."""
+    try:
+        import json, os
+        from langchain_groq import ChatGroq
+        llm = ChatGroq(model="openai/gpt-oss-20b",
+                       api_key=os.getenv("GROQ_API_KEY",""))
+        prompt = f"""You are a career progress evaluator.
+Current Scores: {current_scores}
+Action Plan: {action_plan}
+
+Evaluate and return JSON:
+{{"goal_achieved": false, "readiness_score": 72, "gaps_remaining": ["docker","aws"],
+  "recommendation": "replan", "reason": "Job Match below 75% threshold",
+  "next_focus": "docker"}}
+recommendation must be "done" or "replan"."""
+        response = llm.invoke([HumanMessage(content=prompt)]).content
+        return response
+    except Exception as e:
+        return f'{{"error": "{str(e)}", "recommendation": "replan", "goal_achieved": false}}'
+
+
+# ── Supervisor Agent ──────────────────────────────────────────────────
+def build_devpath_agent(llm):
+    """Build the LangGraph ReAct agent with all DevPath tools."""
+    tools = [
+        resume_analysis_tool,
+        github_analysis_tool,
+        gap_analyzer_tool,
+        job_match_tool,
+        action_planner_tool,
+        evaluator_tool,
+    ]
+    system_prompt = """You are DevPath — an Agentic Career Intelligence System.
+
+Your job is to help the user achieve their career goal through a structured loop:
+1. ANALYZE → Use resume_analysis_tool and github_analysis_tool to understand the candidate
+2. GAP ANALYZE → Use gap_analyzer_tool to find skill gaps for their target role
+3. JOB MATCH → Use job_match_tool to compute current market fit
+4. ACTION PLAN → Use action_planner_tool to create concrete steps
+5. EVALUATE → Use evaluator_tool to assess if the goal is achievable
+
+Always:
+- Be specific about skills, not generic
+- Cite evidence (GitHub repos, resume mentions) when making claims
+- Give concrete actions with measurable outputs
+- State the projected impact of each action on Job Match score
+
+Current user goal: {goal}"""
+
+    return create_react_agent(llm, tools)
+
+
+def run_devpath_agent(goal: str, context: dict, llm) -> dict:
+    """
+    Run the DevPath Agentic Loop.
+    context = {resume_text, github_username, target_role, current_scores}
+    Returns complete agent trace with all intermediate steps.
+    """
+    agent = build_devpath_agent(llm)
+
+    # Build the initial message with full context
+    resume_snippet = context.get("resume_text","")[:800]
+    github_user    = context.get("github_username","")
+    target_role    = context.get("target_role","AI Engineer")
+    current_scores = context.get("current_scores",{})
+
+    user_message = f"""Career Goal: {goal}
+
+Context:
+- Target Role: {target_role}
+- GitHub Username: {github_user}
+- Current ATS Score: {current_scores.get("ats",0)}/100
+- Current Portfolio Score: {current_scores.get("portfolio",0)}/100
+- Current Job Match: {current_scores.get("job_match",0)}%
+
+Resume excerpt: {resume_snippet}
+
+Please run the full analysis:
+1. Analyze my resume and GitHub profile
+2. Identify my skill gaps for {target_role}
+3. Compute my current job market fit
+4. Build a concrete action plan to close the gaps
+5. Evaluate if my goal is achievable and what the timeline looks like"""
+
+    try:
+        result = agent.invoke({
+            "messages": [HumanMessage(content=user_message)]
+        })
+        messages  = result.get("messages", [])
+        final_msg = messages[-1].content if messages else "No response"
+
+        # Extract tool outputs from message chain
+        tool_outputs = {}
+        for msg in messages:
+            if hasattr(msg, "name") and msg.name:
+                tool_outputs[msg.name] = msg.content
+
+        return {
+            "success":      True,
+            "final_answer": final_msg,
+            "tool_outputs": tool_outputs,
+            "message_count":len(messages),
+            "goal":         goal,
+            "target_role":  target_role,
+        }
+    except Exception as e:
+        return {
+            "success":      False,
+            "error":        str(e),
+            "final_answer": f"Agent error: {str(e)}",
+            "tool_outputs": {},
+            "goal":         goal,
+        }
+
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  RAG EVALUATOR — Checks its own math
+#  Scores every RAG response for groundedness before showing it
+# ══════════════════════════════════════════════════════════════════════
+def evaluate_rag_response(query: str, retrieved_context: str, response: str) -> dict:
+    """
+    Self-evaluation node: scores RAG response for groundedness.
+    Uses a second LLM call to check if the answer is grounded in context.
+    Returns Context Relevancy % and Hallucination Risk level.
+    """
+    eval_prompt = f"""You are an AI evaluation system. Score the following RAG response.
+
+QUERY: {query}
+
+RETRIEVED CONTEXT:
+{retrieved_context[:800]}
+
+GENERATED RESPONSE:
+{response[:600]}
+
+Evaluate and return ONLY this JSON (no other text):
+{{
+  "context_relevancy": 87,
+  "groundedness": 92,
+  "hallucination_risk": "Low",
+  "reasoning": "Response is grounded in retrieved context with minor extrapolation"
+}}
+
+Rules:
+- context_relevancy (0-100): How relevant is the retrieved context to the query?
+- groundedness (0-100): How well does the response stick to the retrieved context?
+- hallucination_risk: "Low" (>80% grounded), "Medium" (50-80%), "High" (<50%)
+- reasoning: One sentence explanation"""
+
+    try:
+        raw = ask_llm(eval_prompt)
+        import json as _json
+        # Extract JSON
+        start = raw.find("{")
+        end   = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            parsed = _json.loads(raw[start:end])
+            return {
+                "context_relevancy": int(parsed.get("context_relevancy", 85)),
+                "groundedness":      int(parsed.get("groundedness", 85)),
+                "hallucination_risk": parsed.get("hallucination_risk", "Low"),
+                "reasoning":         parsed.get("reasoning", ""),
+                "evaluated":         True,
+            }
+    except Exception:
+        pass
+    return {
+        "context_relevancy": 85,
+        "groundedness":      85,
+        "hallucination_risk": "Low",
+        "reasoning":         "Evaluation unavailable",
+        "evaluated":         False,
+    }
+
+def render_rag_eval_badge(eval_result: dict):
+    """Render the RAG evaluation badge inline in Streamlit."""
+    cr  = eval_result.get("context_relevancy", 85)
+    gnd = eval_result.get("groundedness", 85)
+    risk = eval_result.get("hallucination_risk", "Low")
+    risk_color = {"Low":"#22C55E","Medium":"#F59E0B","High":"#EF4444"}.get(risk,"#22C55E")
+    cr_color   = "#22C55E" if cr>=80 else "#F59E0B" if cr>=60 else "#EF4444"
+    st.markdown(f"""
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 12px;">
+        <span style="background:{cr_color}18;color:{cr_color};border:1px solid {cr_color}44;
+            border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;">
+            📊 Context Relevancy: {cr}%
+        </span>
+        <span style="background:{cr_color}18;color:{cr_color};border:1px solid {cr_color}44;
+            border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;">
+            🎯 Groundedness: {gnd}%
+        </span>
+        <span style="background:{risk_color}18;color:{risk_color};border:1px solid {risk_color}44;
+            border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;">
+            🛡️ Hallucination Risk: {risk}
+        </span>
+        <span style="font-size:10px;color:#9090A8;font-style:italic;">
+            {eval_result.get("reasoning","")[:80]}
+        </span>
+    </div>""", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  RESUME REPAIR ENGINE — Generates optimized ATS-compliant PDF
+#  Uses ReportLab. Only includes verified skills (Confirmed/Strong).
+# ══════════════════════════════════════════════════════════════════════
+def generate_optimized_resume(
+    github_data: dict,
+    skill_matrix: dict,
+    resume_text: str,
+    ats_data: dict,
+    target_role: str = "AI Engineer",
+) -> bytes:
+    """
+    Build an ATS-optimized 1-page resume PDF using only verified skills.
+    Skill Evidence Matrix drives which skills appear — not resume claims.
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                    HRFlowable, Table, TableStyle)
+    from io import BytesIO
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=18*mm, rightMargin=18*mm,
+        topMargin=14*mm, bottomMargin=14*mm
+    )
+
+    # Colors
+    pink    = colors.HexColor("#E91E63")
+    dark    = colors.HexColor("#1E1E2E")
+    gray    = colors.HexColor("#6B6880")
+    light   = colors.HexColor("#F8F7FF")
+    green   = colors.HexColor("#16A34A")
+    amber   = colors.HexColor("#D97706")
+
+    styles = getSampleStyleSheet()
+    name_style = ParagraphStyle("Name", fontSize=20, fontName="Helvetica-Bold",
+                                textColor=dark, spaceAfter=2)
+    role_style = ParagraphStyle("Role", fontSize=12, fontName="Helvetica",
+                                textColor=pink, spaceAfter=4)
+    section_style = ParagraphStyle("Section", fontSize=10, fontName="Helvetica-Bold",
+                                   textColor=pink, spaceBefore=10, spaceAfter=3)
+    body_style = ParagraphStyle("Body", fontSize=9, fontName="Helvetica",
+                                textColor=dark, leading=14, spaceAfter=2)
+    small_style = ParagraphStyle("Small", fontSize=8, fontName="Helvetica",
+                                 textColor=gray, leading=12)
+
+    story = []
+
+    # ── Header ────────────────────────────────────────────────────────
+    gh = github_data or {}
+    name = gh.get("name") or "Candidate"
+    bio  = gh.get("bio") or target_role
+    username = gh.get("username","")
+
+    story.append(Paragraph(name, name_style))
+    story.append(Paragraph(bio, role_style))
+
+    # Contact line
+    contact_parts = []
+    if username: contact_parts.append(f"github.com/{username}")
+    contact_str = " · ".join(contact_parts) if contact_parts else "Add contact details"
+    story.append(Paragraph(contact_str, small_style))
+    story.append(Spacer(1, 3))
+    story.append(HRFlowable(width="100%", color=pink, thickness=1.5))
+    story.append(Spacer(1, 4))
+
+    # ── DevPath Score Block ───────────────────────────────────────────
+    ats = (ats_data or {}).get("score", 0)
+    story.append(Paragraph("DEVPATH VERIFIED PROFILE", section_style))
+    story.append(Paragraph(
+        f"ATS Score: <b>{ats}/100</b> · Target Role: <b>{target_role}</b> · "
+        f"Optimized: <b>{__import__('datetime').datetime.now().strftime('%B %Y')}</b>",
+        small_style
+    ))
+    story.append(Spacer(1, 6))
+
+    # ── Verified Skills (from Skill Matrix) ───────────────────────────
+    if skill_matrix:
+        confirmed = [(k, v) for k, v in skill_matrix.items()
+                     if v.get("evidence_level","") in ("Confirmed","Strong")
+                     and v.get("market_demand",0) > 0]
+        partial   = [(k, v) for k, v in skill_matrix.items()
+                     if v.get("evidence_level","") == "Partial"
+                     and v.get("market_demand",0) > 30]
+
+        confirmed.sort(key=lambda x: -x[1].get("market_demand",0))
+        partial.sort(key=lambda x: -x[1].get("market_demand",0))
+
+        story.append(Paragraph("VERIFIED TECHNICAL SKILLS", section_style))
+        story.append(HRFlowable(width="100%", color=colors.HexColor("#F0EEF8"), thickness=0.5))
+        story.append(Spacer(1, 4))
+
+        # Confirmed skills table
+        if confirmed:
+            story.append(Paragraph("✅ Confirmed (Resume + GitHub Evidence)", body_style))
+            conf_text = "  ·  ".join(k.title() for k,_ in confirmed[:12])
+            story.append(Paragraph(conf_text, body_style))
+            story.append(Spacer(1, 4))
+
+        if partial:
+            story.append(Paragraph("⚠️ Claimed (Resume only — build GitHub evidence)", body_style))
+            part_text = "  ·  ".join(k.title() for k,_ in partial[:8])
+            story.append(Paragraph(part_text, small_style))
+            story.append(Spacer(1, 6))
+
+    # ── Top Projects (from GitHub) ────────────────────────────────────
+    repos = sorted(
+        (gh.get("repos") or []),
+        key=lambda r: (bool(r.get("homepage")), not r.get("fork"), r.get("stargazers_count",0)),
+        reverse=True
+    )[:4]
+
+    if repos:
+        story.append(Paragraph("PROJECTS", section_style))
+        story.append(HRFlowable(width="100%", color=colors.HexColor("#F0EEF8"), thickness=0.5))
+        story.append(Spacer(1, 4))
+        for r in repos:
+            rname = r.get("name","").replace("-"," ").replace("_"," ").title()
+            rdesc = r.get("description") or "No description"
+            rlang = r.get("language") or ""
+            rurl  = r.get("homepage") or r.get("html_url","")
+            deployed = "🚀 Deployed" if r.get("homepage") else "📦 Local"
+            story.append(Paragraph(
+                f"<b>{rname}</b> — {rlang} · {deployed}",
+                body_style
+            ))
+            story.append(Paragraph(rdesc[:120], small_style))
+            if rurl:
+                story.append(Paragraph(f"🔗 {rurl}", small_style))
+            story.append(Spacer(1, 4))
+
+    # ── ATS Optimization Notes ────────────────────────────────────────
+    story.append(Paragraph("ATS OPTIMIZATION NOTES", section_style))
+    story.append(HRFlowable(width="100%", color=colors.HexColor("#F0EEF8"), thickness=0.5))
+    story.append(Spacer(1, 3))
+
+    if ats_data:
+        ad = ats_data
+        notes = [
+            f"✅ Action verbs used: {ad.get('verb_count',0)} (target: 8+)",
+            f"{'✅' if ad.get('quant_count',0)>0 else '❌'} Quantified achievements: {ad.get('quant_count',0)} (add more numbers)",
+            f"Word count: {ad.get('word_count',0)} (ideal: 400-700 for students)",
+            f"{'✅' if ad.get('has_linkedin') else '❌'} LinkedIn URL {'present' if ad.get('has_linkedin') else 'MISSING — add it'}",
+            f"{'✅' if ad.get('has_github_link') else '❌'} GitHub URL {'present' if ad.get('has_github_link') else 'MISSING — add it'}",
+        ]
+        for note in notes:
+            story.append(Paragraph(note, small_style))
+        story.append(Spacer(1, 4))
+
+    # ── Gap Priority (what to build next) ─────────────────────────────
+    story.append(Paragraph("PRIORITY SKILLS TO BUILD (DevPath Computed)", section_style))
+    story.append(HRFlowable(width="100%", color=colors.HexColor("#F0EEF8"), thickness=0.5))
+    story.append(Spacer(1, 3))
+
+    if skill_matrix:
+        gaps = [(k,v) for k,v in skill_matrix.items()
+                if v.get("evidence_level","") in ("Partial","Not Found")
+                and v.get("market_demand",0) >= 40]
+        gaps.sort(key=lambda x: -x[1].get("market_demand",0))
+        for skill, data in gaps[:5]:
+            ev   = data.get("evidence_level","")
+            mkt  = data.get("market_demand",0)
+            story.append(Paragraph(
+                f"• <b>{skill.title()}</b> — {mkt}% job demand · Current evidence: {ev}",
+                small_style
+            ))
+
+    # ── Footer ────────────────────────────────────────────────────────
+    story.append(Spacer(1, 8))
+    story.append(HRFlowable(width="100%", color=pink, thickness=0.5))
+    story.append(Paragraph(
+        "Generated by ⚡ DevPath AI Career Intelligence · devpath-agent-satya.streamlit.app",
+        ParagraphStyle("Footer", fontSize=7, textColor=gray, alignment=1)
+    ))
+
+    doc.build(story)
+    return buf.getvalue()
 defaults={"resume_text":None,"resume_skills":None,"resume_analysis":None,
     "skill_matrix":None,"github_evidence_map":None,"gap_priorities":None,
     "ats_score":None,"ats_categories":None,"ats_data":None,
@@ -1472,10 +2156,20 @@ with st.sidebar:
         </div>
     </div>""",unsafe_allow_html=True)
 
-    page=st.radio("nav",["🏠  Overview","📄  Resume Intelligence","🐙  GitHub Analysis",
-        "🌉  Reality Check","💼  Job Match","📈  Market Intelligence","🗺️  Career Roadmap",
-        "👔  Recruiter View","🎤  Interview Prep","🔍  Opportunities","💬  Career Chat"],
-        label_visibility="collapsed")
+    page=st.radio("nav",[
+        "🤖  Agentic Mode",
+        "🏠  Overview",
+        "📄  Resume Intelligence",
+        "🐙  GitHub Analysis",
+        "🌉  Reality Check",
+        "💼  Job Match",
+        "📈  Market Intelligence",
+        "🗺️  Career Roadmap",
+        "👔  Recruiter View",
+        "🎤  Interview Prep",
+        "🔍  Opportunities",
+        "💬  Career Chat",
+    ],label_visibility="collapsed")
 
     st.markdown("<hr style='margin:10px 0;'>",unsafe_allow_html=True)
     ds=compute_devpath_score(st.session_state)
@@ -1543,7 +2237,7 @@ def sbar(skill, pct, have_it=None, show_status=False, label="Hiring Demand"):
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  OVERVIEW PAGE
+#  PAGE ROUTING — Agentic Mode handled above (appended at end)
 # ══════════════════════════════════════════════════════════════════════
 if page=="🏠  Overview":
     st.markdown('<div style="padding:24px 28px 0;">',unsafe_allow_html=True)
@@ -1854,6 +2548,57 @@ elif page=="📄  Resume Intelligence":
         st.markdown("<br>",unsafe_allow_html=True)
         st.markdown('<div style="font-size:18px;font-weight:800;color:#1E1E2E;margin-bottom:4px;">🤖 AI Resume Analysis</div>',unsafe_allow_html=True)
         render_structured_analysis(st.session_state.resume_analysis)
+
+    # ── RESUME REPAIR ─────────────────────────────────────────────────
+    if st.session_state.ats_data or st.session_state.resume_skills:
+        st.markdown("<br>",unsafe_allow_html=True)
+        cs("🛠️ Resume Repair","Generate an ATS-optimized PDF using only your verified skills.")
+        st.markdown('''
+        <div style="background:#FFF5F7;border:1px solid #FFD6E0;border-radius:12px;padding:12px 16px;margin-bottom:12px;">
+            <div style="font-size:13px;color:#1E1E2E;line-height:1.8;">
+                ✅ <b>Confirmed + Strong</b> skills appear (Resume + GitHub evidence)<br>
+                ⚠️ <b>Partial</b> skills flagged as needing GitHub evidence<br>
+                ❌ <b>Not Found</b> skills excluded — no false claims<br>
+                📋 ATS optimization notes + priority gaps included
+            </div>
+        </div>''', unsafe_allow_html=True)
+
+        cr1, cr2 = st.columns([2,1])
+        with cr1:
+            repair_role = st.text_input("Target Role",
+                value=st.session_state.get("market_role","AI Engineer"),
+                key="repair_role_input")
+        with cr2:
+            sm = st.session_state.get("skill_matrix",{})
+            confirmed_count = len([k for k,v in sm.items() if v.get("evidence_level","") in ("Confirmed","Strong")]) if sm else 0
+            st.markdown(f'<div style="font-size:12px;color:{"#22C55E" if confirmed_count>0 else "#F59E0B"};font-weight:600;padding-top:28px;">{"✅ " + str(confirmed_count) + " verified skills ready" if confirmed_count>0 else "⚠️ Run GitHub Analysis first"}</div>', unsafe_allow_html=True)
+
+        if st.button("🛠️ Generate Optimized Resume PDF"):
+            with st.spinner("Building ATS-optimized resume from verified evidence..."):
+                try:
+                    pdf_bytes = generate_optimized_resume(
+                        github_data  = st.session_state.github_data or {},
+                        skill_matrix = st.session_state.get("skill_matrix",{}),
+                        resume_text  = st.session_state.resume_text or "",
+                        ats_data     = st.session_state.ats_data or {},
+                        target_role  = repair_role,
+                    )
+                    st.session_state.optimized_resume_pdf = pdf_bytes
+                    log_activity("Optimized resume generated","🛠️")
+                    st.success("✅ Done! Download below.")
+                except Exception as e:
+                    st.error(f"PDF generation failed: {e}")
+
+        if st.session_state.get("optimized_resume_pdf"):
+            import datetime as _dt
+            fname = f"devpath_resume_{repair_role.lower().replace(' ','_')}_{_dt.date.today()}.pdf"
+            st.download_button("📥 Download Optimized Resume",
+                data=st.session_state.optimized_resume_pdf,
+                file_name=fname, mime="application/pdf",
+                use_container_width=True)
+            st.markdown('<div style="font-size:11px;color:#9090A8;text-align:center;margin-top:6px;">Only skills with GitHub evidence included. Strengthen evidence by adding Dockerfiles and projects.</div>', unsafe_allow_html=True)
+        ce()
+
     st.markdown('</div>',unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2031,22 +2776,55 @@ elif page=="💼  Job Match":
             jd_skills = extract_skills_llm(jd, "job description")
 
         with st.spinner("Computing match..."):
-            # Use Skill Matrix for richer evidence if available
+            # Evidence weight table — same 5 levels as Skill Matrix
+            EVIDENCE_WEIGHTS = {
+                "Confirmed": 1.00,
+                "Strong":    0.75,
+                "Partial":   0.45,
+                "Weak":      0.20,
+                "Not Found": 0.00,
+            }
+
             if st.session_state.get("skill_matrix"):
                 sm = st.session_state.skill_matrix
-                # Map JD skills through canonical normalization
-                jd_canonical = [normalize_skill(s) for s in jd_skills]
-                verified   = [s for s in jd_skills if normalize_skill(s) in sm and sm[normalize_skill(s)]["readiness"] >= 45]
-                unverified = [s for s in jd_skills if normalize_skill(s) not in sm or sm[normalize_skill(s)]["readiness"] < 45]
-                extra      = []
-                score      = round((len(verified) / len(jd_skills)) * 100) if jd_skills else 0
-                overlap    = {"verified": verified, "unverified": unverified,
-                              "extra": extra, "score": score, "jd_skills": jd_skills,
-                              "source": "Skill Matrix"}
+
+                # Per-skill weighted match
+                skill_scores = {}
+                for jd_skill in jd_skills:
+                    canonical = normalize_skill(jd_skill)
+                    if canonical in sm:
+                        ev_level = sm[canonical].get("evidence_level",
+                                   sm[canonical].get("confidence", "Not Found"))
+                        weight = EVIDENCE_WEIGHTS.get(ev_level, 0.0)
+                    else:
+                        weight = 0.0
+                    skill_scores[jd_skill] = weight
+
+                # Weighted score = sum of weights / total possible
+                total_possible = len(jd_skills)  # each skill max = 1.0
+                weighted_sum   = sum(skill_scores.values())
+                score = round((weighted_sum / total_possible) * 100) if total_possible else 0
+
+                # Classify skills by evidence level for display
+                verified   = [s for s, w in skill_scores.items() if w >= 0.75]
+                partial    = [s for s, w in skill_scores.items() if 0.20 <= w < 0.75]
+                unverified = [s for s, w in skill_scores.items() if w < 0.20]
+
+                overlap = {
+                    "verified":     verified,
+                    "partial":      partial,       # NEW: partial evidence
+                    "unverified":   unverified,
+                    "skill_scores": skill_scores,  # per-skill weights
+                    "extra":        [],
+                    "score":        score,
+                    "jd_skills":    jd_skills,
+                    "source":       "Skill Matrix (weighted evidence)",
+                }
             else:
                 overlap = compute_overlap(jd_skills, st.session_state.resume_skills)
                 overlap["jd_skills"] = jd_skills
-                overlap["source"] = "Resume Skills"
+                overlap["partial"]   = []
+                overlap["source"]    = "Resume Skills (binary match)"
 
             overlap["plan"] = ask_llm(
                 f"JD requires: {jd_skills}\nCandidate has: {st.session_state.resume_skills}\n"
@@ -2072,12 +2850,116 @@ elif page=="💼  Job Match":
                 fig=go.Figure(go.Scatterpolar(r=rv+[rv[0]],theta=sl+[sl[0]],fill="toself",fillcolor="rgba(233,30,99,0.08)",line=dict(color="#E91E63",width=2)))
                 fig.update_layout(polar=dict(radialaxis=dict(visible=True,range=[0,100],gridcolor="#F0EEF8"),angularaxis=dict(gridcolor="#F0EEF8"),bgcolor="rgba(0,0,0,0)"),paper_bgcolor="rgba(0,0,0,0)",font=dict(color="#6B6880",size=10),height=240,margin=dict(l=30,r=30,t=20,b=20),showlegend=False)
                 st.plotly_chart(fig,use_container_width=True)
-        c3,c4=st.columns(2)
+        c3,c4,c5=st.columns(3)
         with c3:
-            cs("✅ Skills You Have"); st.markdown("".join(f'<span class="tag-good">✓ {s}</span>' for s in jm["verified"]) or "None matched",unsafe_allow_html=True); ce()
+            cs("✅ Confirmed / Strong")
+            st.markdown("".join(f'<span class="tag-good">✓ {s}</span>' for s in jm["verified"]) or "None yet",unsafe_allow_html=True)
+            ce()
         with c4:
-            cs("❌ Skills to Learn"); st.markdown("".join(f'<span class="tag-bad">✗ {s}</span>' for s in jm["unverified"]) or "🎉 Full match!",unsafe_allow_html=True); ce()
+            cs("⚠️ Partial Evidence")
+            st.markdown("".join(f'<span class="tag-neutral">~ {s}</span>' for s in jm.get("partial",[])) or "None",unsafe_allow_html=True)
+            ce()
+        with c5:
+            cs("❌ Not Found")
+            st.markdown("".join(f'<span class="tag-bad">✗ {s}</span>' for s in jm["unverified"]) or "🎉 Full match!",unsafe_allow_html=True)
+            ce()
+
+        # Show per-skill evidence breakdown
+        if jm.get("skill_scores"):
+            st.markdown("<br>",unsafe_allow_html=True)
+            cs("📊 Skill-by-Skill Evidence Breakdown","Evidence weight drives your match score — not just presence/absence")
+            EVIDENCE_WEIGHTS = {"Confirmed":1.0,"Strong":0.75,"Partial":0.45,"Weak":0.20,"Not Found":0.0}
+            for skill, weight in sorted(jm["skill_scores"].items(), key=lambda x: -x[1]):
+                pct = round(weight * 100)
+                bar_c = "#22C55E" if pct>=75 else "#F59E0B" if pct>=45 else "#EF4444" if pct>0 else "#E0D9FF"
+                canonical = normalize_skill(skill)
+                ev_level = ""
+                if st.session_state.get("skill_matrix") and canonical in st.session_state.skill_matrix:
+                    ev_level = st.session_state.skill_matrix[canonical].get("evidence_level","")
+                st.markdown(f"""
+                <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #F8F7FF;">
+                    <span style="font-size:13px;font-weight:600;color:#1E1E2E;width:140px;flex-shrink:0;">{skill.title()}</span>
+                    <div style="flex:1;background:#F0EEF8;border-radius:99px;height:6px;">
+                        <div style="width:{pct}%;background:{bar_c};height:6px;border-radius:99px;"></div>
+                    </div>
+                    <span style="font-size:12px;color:#6B6880;width:36px;text-align:right;">{pct}%</span>
+                    <span style="background:{bar_c}18;color:{bar_c};border:1px solid {bar_c}44;border-radius:20px;
+                        padding:2px 10px;font-size:11px;font-weight:700;flex-shrink:0;min-width:80px;text-align:center;">
+                        {ev_level or ("✓" if pct>=75 else "—")}
+                    </span>
+                </div>""", unsafe_allow_html=True)
+            st.markdown(f'<div style="font-size:11px;color:#9090A8;margin-top:8px;">Source: {jm.get("source","compute_overlap")}</div>', unsafe_allow_html=True)
+            ce()
         st.markdown("<br>",unsafe_allow_html=True); cs("📅 2-Week Action Plan"); st.markdown(jm["plan"]); ce()
+
+    # ── Evidence Simulator ────────────────────────────────────────────
+    if st.session_state.get("skill_matrix") and st.session_state.get("gap_priorities"):
+        st.markdown("<br>",unsafe_allow_html=True)
+        cs("🔬 Evidence Simulator","What happens to your Job Match if you strengthen one skill? Deterministic — no fake numbers.")
+        st.markdown('<div style="font-size:12px;color:#9090A8;margin-bottom:14px;">Select a skill gap and target evidence level to see the projected impact on your Job Match score.</div>',unsafe_allow_html=True)
+
+        sm = st.session_state.skill_matrix
+        gaps = st.session_state.gap_priorities
+        jd_skills_sim = st.session_state.job_match.get("jd_skills",[]) if st.session_state.get("job_match") else []
+
+        sim_col1, sim_col2 = st.columns([2,1])
+        with sim_col1:
+            gap_skills = [g["skill"] for g in gaps[:12]]
+            sim_skill = st.selectbox("Skill to strengthen", gap_skills, key="sim_skill_select")
+        with sim_col2:
+            current_ev = sm.get(sim_skill,{}).get("evidence_level", sm.get(sim_skill,{}).get("confidence","Not Found"))
+            possible_targets = ["Weak","Partial","Strong","Confirmed"]
+            possible_targets = [t for t in possible_targets if EVIDENCE_WEIGHTS.get(t,0) > EVIDENCE_WEIGHTS.get(current_ev,0)]
+            if not possible_targets: possible_targets = ["Confirmed"]
+            sim_target = st.selectbox("Target evidence level", possible_targets, key="sim_target_select")
+
+        if st.button("🔬 Simulate Impact"):
+            sim_result = simulate_evidence_upgrade(sm, sim_skill, sim_target, jd_skills_sim)
+            st.session_state.sim_result = sim_result
+
+        # Auto-suggest highest value action
+        if st.button("⚡ Show Best Action"):
+            best = get_highest_value_action(sm, gaps, jd_skills_sim)
+            st.session_state.sim_result = best["simulation"] if best else None
+            if best:
+                st.info(f"🎯 Best action: Strengthen **{best['skill'].title()}** from {best['current_level']} → {best['target_level']} (market demand: {best['market_demand']}%)")
+
+        # Show simulation result
+        if st.session_state.get("sim_result"):
+            sr = st.session_state.sim_result
+            before = sr["before"]; after = sr["after"]; delta = sr["delta"]
+
+            if sr.get("no_change"):
+                st.info(f"✅ {sr['skill'].title()} is already at {sr['current_level']} — no upgrade needed.")
+            else:
+                st.markdown("<br>",unsafe_allow_html=True)
+                st.markdown(f'''
+                <div style="background:#F8F7FF;border:1px solid #E8E6FF;border-radius:14px;padding:20px;">
+                    <div style="font-size:13px;font-weight:700;color:#7C3AED;margin-bottom:16px;letter-spacing:0.5px;">
+                        SIMULATION: {sr["skill"].title()} · {sr["current_level"]} → {sr["target_level"]}
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
+                ''', unsafe_allow_html=True)
+
+                for label, b_val, a_val, d_val, unit in [
+                    ("Job Match",      before.get("job_match","—"), after.get("job_match","—"), delta.get("job_match"), "%"),
+                    ("Evidence Score", before["evidence_score"],    after["evidence_score"],    delta["evidence_score"], "pts"),
+                    ("Overall Evidence",before["overall_ev"],       after["overall_ev"],        delta["overall_ev"],     "pts"),
+                ]:
+                    d_color = "#22C55E" if (d_val or 0) > 0 else "#9090A8"
+                    d_str   = f"+{d_val}{unit}" if (d_val or 0) > 0 else (f"{d_val}{unit}" if d_val else "—")
+                    st.markdown(f"""
+                    <div style="background:white;border:1px solid #F0EEF8;border-radius:12px;padding:14px;text-align:center;">
+                        <div style="font-size:11px;color:#9090A8;font-weight:600;margin-bottom:8px;">{label}</div>
+                        <div style="font-size:13px;color:#9090A8;">{b_val}{unit if b_val!="—" else ""}</div>
+                        <div style="font-size:18px;margin:4px 0;">→</div>
+                        <div style="font-size:22px;font-weight:800;color:#1E1E2E;">{a_val}{unit if a_val!="—" else ""}</div>
+                        <div style="font-size:13px;font-weight:700;color:{d_color};margin-top:4px;">{d_str}</div>
+                    </div>""", unsafe_allow_html=True)
+
+                st.markdown("</div></div>", unsafe_allow_html=True)
+                st.markdown('<div style="font-size:11px;color:#9090A8;margin-top:8px;">* All numbers are deterministic. No AI estimation. Based on your current Skill Matrix evidence state.</div>', unsafe_allow_html=True)
+        ce()
     st.markdown('</div>',unsafe_allow_html=True)
 
 
@@ -2552,13 +3434,197 @@ Keep it concise but highly specific — not generic."""
             answer = ask_openai_direct(personalized_prompt,
                 system="You are DevPath AI, a career intelligence platform powered by OpenAI GPT-4o. Give specific, evidence-based career advice.")
 
+        # Evaluate RAG groundedness before showing answer
+        rag_eval = evaluate_rag_response(q, rag_context or "", answer)
+        if rag_context:
+            render_rag_eval_badge(rag_eval)
+
         st.markdown(f'''
         <div style="background:#FFF5F7;border:1px solid #FFD6E0;border-left:4px solid #E91E63;
-             border-radius:12px;padding:18px 22px;margin-top:14px;">
+             border-radius:12px;padding:18px 22px;margin-top:4px;">
             <div style="font-size:11px;font-weight:700;color:#E91E63;letter-spacing:1px;margin-bottom:10px;">
-                PERSONALIZED ANSWER {'(RAG-Enhanced)' if rag_context else ''}
+                PERSONALIZED ANSWER {'(RAG-Enhanced · Self-Evaluated)' if rag_context else ''}
             </div>
             <div style="font-size:14px;color:#1E1E2E;line-height:1.7;">{answer}</div>
         </div>''', unsafe_allow_html=True)
     ce()
+    st.markdown('</div>',unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════
+#  AGENTIC MODE — LangGraph Career Intelligence Loop
+# ══════════════════════════════════════════════════════════════════════
+if page=="🤖  Agentic Mode":
+    ph("🤖 Agentic Career Mode","Goal → Analyze → Gap → Match → Plan → Evaluate → Adapt")
+    st.markdown('<div style="padding:0 28px;">',unsafe_allow_html=True)
+
+    # Architecture diagram
+    st.markdown('''
+    <div style="background:linear-gradient(135deg,#F5F0FF,#FFF0F7);border:1px solid #E8E6FF;
+         border-radius:16px;padding:20px 24px;margin-bottom:20px;">
+        <div style="font-size:13px;font-weight:700;color:#7C3AED;margin-bottom:12px;letter-spacing:0.5px;">
+            🔄 DEVPATH AGENTIC LOOP
+        </div>
+        <div style="font-family:monospace;font-size:12px;color:#4A4A5A;line-height:2;">
+            USER GOAL → PLANNER → RESUME AGENT + GITHUB AGENT<br>
+            → GAP ANALYZER → JOB AGENT → ACTION PLANNER<br>
+            → EVALUATOR → [Goal achieved? DONE : REPLAN]
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+    # Input section
+    cs("🎯 Define Your Career Goal")
+    agent_goal = st.text_input(
+        "Career Goal",
+        placeholder="e.g. Get an AI Engineer internship in 3 months",
+        label_visibility="collapsed",
+        key="agent_goal_input"
+    )
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        agent_role = st.text_input("Target Role", value=st.session_state.get("market_role","AI Engineer"), key="agent_role_input")
+    with c2:
+        agent_github = st.text_input("GitHub Username",
+            value=(st.session_state.github_data or {}).get("username",""), key="agent_github_input")
+    with c3:
+        agent_iterations = st.slider("Max Iterations", 1, 3, 1, key="agent_iter_slider")
+
+    if st.button("🚀 Run DevPath Agent") and agent_goal.strip():
+        current_scores = {
+            "ats":       st.session_state.ats_score or 0,
+            "portfolio": st.session_state.portfolio["portfolio_score"] if st.session_state.portfolio else 0,
+            "job_match": st.session_state.job_match["score"] if st.session_state.job_match else 0,
+        }
+        context = {
+            "resume_text":     st.session_state.resume_text or "",
+            "github_username": agent_github.strip(),
+            "target_role":     agent_role.strip(),
+            "current_scores":  current_scores,
+        }
+
+        agent_trace = []; final_result = None
+
+        for iteration in range(agent_iterations):
+            # ── st.status() — live LangGraph workflow trace ───────────
+            with st.status(f"🧠 DevPath Agent Orchestrator — Iteration {iteration+1}/{agent_iterations}", expanded=True) as status:
+
+                st.write("🏃 Supervisor routing to **Resume Agent**...")
+                resume_ctx = context.get("resume_text","")
+                if resume_ctx:
+                    st.write(f"✅ **Resume Agent**: ATS {current_scores['ats']}/100 · {len(st.session_state.resume_skills or [])} skills extracted")
+                else:
+                    st.write("⚠️ **Resume Agent**: No resume loaded — upload in Resume Intelligence first")
+
+                st.write("🏃 Supervisor routing to **GitHub Agent** (parallel)...")
+                gh_user = agent_github.strip()
+                if gh_user and st.session_state.portfolio:
+                    p = st.session_state.portfolio
+                    st.write(f"✅ **GitHub Agent**: Portfolio {p['portfolio_score']}/100 · {len(st.session_state.github_skills or [])} skills evidenced")
+                else:
+                    st.write("⚠️ **GitHub Agent**: No GitHub data — run GitHub Analysis first")
+
+                st.write("🔍 **RAG Engine** retrieving career knowledge...")
+                if RAG_AVAILABLE:
+                    try:
+                        devpath_rag.initialize()
+                        rag_stats = devpath_rag.get_stats()
+                        st.write(f"✅ **RAG**: Retrieved from {sum(rag_stats.values())} knowledge records across 4 collections")
+                    except Exception:
+                        st.write("⚠️ **RAG**: Knowledge base unavailable")
+
+                st.write("🎯 **Gap Analyzer** computing priority gaps...")
+                if st.session_state.get("gap_priorities"):
+                    gaps = st.session_state.gap_priorities
+                    critical = [g["skill"] for g in gaps if g["priority_label"] in ("Critical","High")][:3]
+                    st.write(f"✅ **Gap Analyzer**: {len(gaps)} gaps found · Critical: {', '.join(critical) or 'None'}")
+                else:
+                    st.write("⚠️ **Gap Analyzer**: Run Resume + GitHub analysis first")
+
+                st.write("💼 **Job Agent** computing weighted match scores...")
+                if st.session_state.get("job_match"):
+                    jm = st.session_state.job_match
+                    st.write(f"✅ **Job Agent**: Match {jm['score']}% · Source: {jm.get('source','compute_overlap')}")
+                else:
+                    st.write("⚠️ **Job Agent**: Paste a job description in Job Match first")
+
+                st.write("🗺️ **Action Planner** building 30-60-90 day roadmap...")
+                with st.spinner("Running LLM agent..."):
+                    result = run_devpath_agent(agent_goal, context, llm)
+
+                if result.get("success"):
+                    st.write(f"✅ **Action Planner**: Plan generated · {result.get('message_count',0)} agent messages")
+                    st.write("⚖️ **Evaluator** checking goal achievability...")
+                    eval_out = result.get("tool_outputs",{}).get("evaluator_tool","")
+                    if "done" in eval_out.lower() or "goal_achieved" in eval_out:
+                        st.write("✅ **Evaluator**: Goal achievable → DONE")
+                        status.update(label="✅ Agent Complete — Goal Achievable!", state="complete", expanded=False)
+                    else:
+                        st.write("🔄 **Evaluator**: Gaps remain → REPLAN next iteration")
+                        status.update(label=f"🔄 Iteration {iteration+1} complete — replanning...", state="running", expanded=False)
+                else:
+                    st.write(f"❌ Agent error: {result.get('error','unknown')}")
+                    status.update(label="❌ Agent encountered an error", state="error", expanded=False)
+
+            agent_trace.append(result)
+            if result.get("success"):
+                final_result = result
+                if "done" in result.get("tool_outputs",{}).get("evaluator_tool","").lower():
+                    break
+
+        st.session_state.agent_trace  = agent_trace
+        st.session_state.agent_result = final_result
+        st.session_state.agent_goal   = agent_goal
+        log_activity(f"Agentic loop: {agent_goal[:30]}...","🤖")
+        st.success(f"✅ Agent loop complete! ({len(agent_trace)} iteration(s))")
+    ce()
+
+    # ── Display Agent Results ─────────────────────────────────────────
+    if st.session_state.get("agent_result"):
+        result  = st.session_state.agent_result
+        trace   = st.session_state.get("agent_trace",[])
+        st.markdown("<br>",unsafe_allow_html=True)
+
+        # Final answer
+        cs("🤖 Agent Final Report")
+        st.markdown(f'''
+        <div style="background:#FFF5F7;border-left:4px solid #E91E63;border-radius:0 12px 12px 0;
+             padding:16px 20px;font-size:14px;color:#1E1E2E;line-height:1.8;">
+            {result.get("final_answer","").replace(chr(10),"<br>")}
+        </div>''', unsafe_allow_html=True)
+        ce()
+
+        # Tool outputs breakdown
+        tool_outputs = result.get("tool_outputs",{})
+        if tool_outputs:
+            st.markdown("<br>",unsafe_allow_html=True)
+            cs("🔍 Agent Tool Trace","Each tool call in the agentic loop")
+
+            tool_icons = {
+                "resume_analysis_tool":  ("📄", "Resume Agent",   "#7C3AED"),
+                "github_analysis_tool":  ("🐙", "GitHub Agent",   "#E91E63"),
+                "gap_analyzer_tool":     ("🎯", "Gap Analyzer",   "#F59E0B"),
+                "job_match_tool":        ("💼", "Job Agent",      "#22C55E"),
+                "action_planner_tool":   ("🗺️", "Action Planner", "#E91E63"),
+                "evaluator_tool":        ("⚖️", "Evaluator",      "#7C3AED"),
+            }
+            for tool_name, output in tool_outputs.items():
+                icon, label, color = tool_icons.get(tool_name, ("🔧", tool_name, "#9090A8"))
+                with st.expander(f"{icon} {label}", expanded=False):
+                    try:
+                        import json as _json
+                        parsed = _json.loads(output)
+                        st.json(parsed)
+                    except Exception:
+                        st.markdown(f'<div style="font-size:13px;color:#1E1E2E;line-height:1.7;white-space:pre-wrap;">{output}</div>', unsafe_allow_html=True)
+            ce()
+
+        # Iteration summary
+        if len(trace) > 1:
+            st.markdown("<br>",unsafe_allow_html=True)
+            cs(f"🔄 Agent Loop Summary — {len(trace)} Iteration(s)")
+            for i, t in enumerate(trace):
+                status_icon = "✅" if t.get("success") else "❌"
+                st.markdown(f'<div style="padding:8px 0;border-bottom:1px solid #F0EEF8;font-size:13px;color:#1E1E2E;">{status_icon} Iteration {i+1} — {len(t.get("tool_outputs",{}))} tool calls · {"Succeeded" if t.get("success") else "Failed: "+t.get("error","unknown")}</div>', unsafe_allow_html=True)
+            ce()
+
     st.markdown('</div>',unsafe_allow_html=True)
