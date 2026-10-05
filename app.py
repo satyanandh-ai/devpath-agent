@@ -1,5 +1,14 @@
-# DevPath 3.0 — Career Intelligence Platform
-# UI matching the provided mockup exactly
+# ==============================================================================
+#  DEVPATH CORE ARCHITECTURE TELEMETRY
+#  - Pipeline: Retrieval-Augmented Generation (RAG) Engine via ChromaDB
+#  - Architecture: Multi-Agent Agentic Workflows orchestrated by LangGraph
+#  - Processing: Asynchronous Python with openai/gpt-oss-20b via Groq APIs
+#  - Embeddings: fastembed BAAI/bge-small-en-v1.5 semantic vector search
+#  - Agent Loop: Observe → Decide → Act → Evaluate → Adapt (LangGraph cycles)
+#  - Skill Engine: Canonical taxonomy with 5-level evidence classification
+#  - RAG Collections: Jobs · Interview Questions · Learning Resources · Career KB
+# ==============================================================================
+# DevPath 3.0 — Agentic Career Intelligence Platform
 
 import streamlit as st
 import requests
@@ -611,7 +620,7 @@ def get_rag():
     _rag_instance.initialize()
     return _rag_instance
 
-devpath_rag = get_rag()
+devpath_rag = None  # initialized lazily
 
 st.set_page_config(
     page_title="DevPath — AI Career Copilot",
@@ -720,11 +729,27 @@ def get_llm():
     # openai/gpt-oss-20b — verified current Groq production model (Sept 2026)
     return ChatGroq(model="openai/gpt-oss-20b", api_key=groq_key)
 
-llm = get_llm()
+# LLM initialized lazily on first use
+llm = None
+
+
+def _get_rag_instance():
+    """Lazy RAG getter — initializes on first use, cached after that."""
+    global devpath_rag
+    if devpath_rag is None:
+        devpath_rag = get_rag()
+    return devpath_rag
+
+def _get_llm_instance():
+    """Lazy LLM getter — initializes on first call, cached after that."""
+    global llm
+    if llm is None:
+        llm = get_llm()
+    return llm
 
 def ask_llm(prompt: str) -> str:
     try:
-        return llm.invoke([HumanMessage(content=prompt)]).content
+        return _get_llm_instance().invoke([HumanMessage(content=prompt)]).content
     except Exception as e:
         return f"ERROR: {str(e)}"
 
@@ -2132,16 +2157,10 @@ def log_activity(msg,icon="📄"):
     st.session_state.activity_log=st.session_state.activity_log[:8]
 
 # ── Sidebar ───────────────────────────────────────────────────────────
-# ── Startup initialization (cached) ─────────────────────────────────
+# ── Startup: mark session, do NOT pre-warm ──────────────────────────
+# Initialization is lazy — triggered only when user actually needs it
 if "app_initialized" not in st.session_state:
     st.session_state.app_initialized = True
-    # Pre-warm the LLM and RAG in background
-    try:
-        get_llm()
-        if RAG_AVAILABLE:
-            get_rag()
-    except Exception:
-        pass
 
 with st.sidebar:
     st.markdown("""
@@ -2360,8 +2379,8 @@ if page=="🏠  Overview":
         st.markdown("<br>",unsafe_allow_html=True)
         cs("🔍 RAG Knowledge Base Status")
         try:
-            devpath_rag.initialize()
-            stats = devpath_rag.get_stats()
+            _get_rag_instance(); devpath_rag = _get_rag_instance()
+            stats = _get_rag_instance().get_stats()
             c_s1,c_s2,c_s3,c_s4 = st.columns(4)
             for col,icon,label,count,color in [
                 (c_s1,"💼","Job Listings",stats.get("jobs",0),"#E91E63"),
@@ -2470,17 +2489,17 @@ elif page=="📄  Resume Intelligence":
                 rag_evidence = {"jobs":[], "learning":[], "career":[]}
                 if RAG_AVAILABLE:
                     try:
-                        devpath_rag.initialize()
+                        _get_rag_instance(); devpath_rag = _get_rag_instance()
                         # Retrieve matching jobs
-                        rag_evidence["jobs"] = devpath_rag.retrieve_jobs(
+                        rag_evidence["jobs"] = _get_rag_instance().retrieve_jobs(
                             "AI Engineer", st.session_state.resume_skills or [], n=3
                         )
                         # Retrieve learning for skill gaps
-                        rag_evidence["learning"] = devpath_rag.retrieve_learning_resources(
+                        rag_evidence["learning"] = _get_rag_instance().retrieve_learning_resources(
                             st.session_state.resume_skills or [], n=3
                         )
                         # Retrieve career knowledge
-                        rag_evidence["career"] = devpath_rag.retrieve_career_knowledge(
+                        rag_evidence["career"] = _get_rag_instance().retrieve_career_knowledge(
                             "resume tips ATS keywords improvements", n=2
                         )
                     except Exception:
@@ -2749,12 +2768,45 @@ elif page=="🌉  Reality Check":
                 st.markdown(f'<div style="font-size:11px;color:#9090A8;margin-top:8px;">{len(relevant)} skills analyzed</div>', unsafe_allow_html=True)
             ce()
         st.markdown("<br>",unsafe_allow_html=True)
-        cs("📊 Skill-by-Skill Breakdown")
-        for skill in rc["verified"]+rc["unverified"]:
-            v=skill in rc["verified"]
-            ic="✓" if v else "✗"; color="#22C55E" if v else "#E91E63"
-            bg="#F0FDF4" if v else "#FFF5F7"; border="#BBF7D0" if v else "#FFD6E0"
-            st.markdown(f'<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:{bg};border:1px solid {border};border-radius:10px;margin-bottom:6px;"><div style="font-size:13px;font-weight:700;color:{color};">{ic} {skill}</div><div style="font-size:11px;color:{"#22C55E" if v else "#9090A8"};font-weight:500;">{"GitHub evidence found" if v else "No evidence found"}</div></div>',unsafe_allow_html=True)
+        cs("📊 Skill-by-Skill Breakdown","Source: Skill Evidence Matrix — not raw text matching")
+        sm = st.session_state.get("skill_matrix", {})
+        all_skills = list(set(rc["verified"] + rc["unverified"]))
+
+        for skill in sorted(all_skills):
+            skill_canon = normalize_skill(skill)
+            # Read from Skill Matrix if available — canonical source of truth
+            if sm and skill_canon in sm:
+                ev_level  = sm[skill_canon].get("evidence_level", "Not Found")
+                ev_reason = sm[skill_canon].get("evidence_reason", "")
+                repos     = sm[skill_canon].get("github_repos", [])
+                repos_str = ", ".join(repos[:2]) if repos else ""
+            else:
+                # Fallback to binary verified/unverified
+                ev_level  = "Confirmed" if skill in rc["verified"] else "Partial"
+                ev_reason = "GitHub evidence found" if skill in rc["verified"] else "Resume only"
+                repos_str = ""
+
+            color  = CONFIDENCE_COLOR.get(ev_level, "#9090A8")
+            icon   = CONFIDENCE_ICON.get(ev_level, "—")
+            bg     = f"{color}08"
+            border = f"{color}22"
+            detail = f" · {repos_str}" if repos_str else ""
+
+            st.markdown(f"""
+            <div style="display:flex;justify-content:space-between;align-items:center;
+                 padding:10px 14px;background:{bg};border:1px solid {border};
+                 border-radius:10px;margin-bottom:6px;">
+                <div style="font-size:13px;font-weight:700;color:{color};">
+                    {icon} {skill}
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:11px;color:#9090A8;">{ev_reason[:50]}{detail}</span>
+                    <span style="background:{color}18;color:{color};border:1px solid {color}44;
+                        border-radius:20px;padding:2px 10px;font-size:11px;font-weight:700;">
+                        {ev_level}
+                    </span>
+                </div>
+            </div>""", unsafe_allow_html=True)
         if rc.get("extra"):
             st.markdown('<br><div style="font-size:14px;font-weight:700;color:#1E1E2E;margin-bottom:8px;">💎 Hidden Strengths (on GitHub, not on Resume)</div>',unsafe_allow_html=True)
             st.markdown("".join(f'<span class="tag-neutral">+ {s}</span>' for s in rc["extra"]),unsafe_allow_html=True)
@@ -2773,7 +2825,27 @@ elif page=="💼  Job Match":
     jd=st.text_area("JD",height=150,placeholder="Paste full job description here...",label_visibility="collapsed")
     if st.session_state.resume_skills and jd.strip() and st.button("💼 Run Job Match"):
         with st.spinner("Extracting JD requirements..."):
-            jd_skills = extract_skills_llm(jd, "job description")
+            # RAG Fallback Node: short queries (< 4 words) = role title
+            # Route to ChromaDB jobs collection for benchmark skill set
+            word_count_jd = len(jd.strip().split())
+            if word_count_jd < 4 and RAG_AVAILABLE:
+                try:
+                    _get_rag_instance(); devpath_rag = _get_rag_instance()
+                    retrieved_jobs = _get_rag_instance().retrieve_jobs(jd.strip(), [], n=3)
+                    if retrieved_jobs:
+                        # Build skill set from retrieved job profiles
+                        rag_skills = []
+                        for j in retrieved_jobs:
+                            rag_skills.extend(j.get("skills", []))
+                        # Deduplicate and normalize
+                        jd_skills = normalize_skill_list(list(set(rag_skills)))
+                        st.info(f"📦 Short query detected — retrieved benchmark skill set from RAG ({len(jd_skills)} skills from {len(retrieved_jobs)} matching job profiles)")
+                    else:
+                        jd_skills = extract_skills_llm(jd, "job description")
+                except Exception:
+                    jd_skills = extract_skills_llm(jd, "job description")
+            else:
+                jd_skills = extract_skills_llm(jd, "job description")
 
         with st.spinner("Computing match..."):
             # Evidence weight table — same 5 levels as Skill Matrix
@@ -3191,8 +3263,8 @@ elif page=="🎤  Interview Prep":
             rag_questions = []
             if RAG_AVAILABLE:
                 try:
-                    devpath_rag.initialize()
-                    rag_questions = devpath_rag.retrieve_interview_questions(tr, n=5)
+                    _get_rag_instance(); devpath_rag = _get_rag_instance()
+                    rag_questions = _get_rag_instance().retrieve_interview_questions(tr, n=5)
                 except Exception:
                     rag_questions = []
 
@@ -3343,9 +3415,9 @@ elif page=="💬  Career Chat":
 
             if RAG_AVAILABLE:
                 try:
-                    devpath_rag.initialize()
+                    _get_rag_instance(); devpath_rag = _get_rag_instance()
 
-                    career_k = devpath_rag.retrieve_career_knowledge(q, n=2)
+                    career_k = _get_rag_instance().retrieve_career_knowledge(q, n=2)
                     if career_k:
                         rag_context += "\nRelevant career knowledge:\n"
                         for c in career_k:
@@ -3355,7 +3427,7 @@ elif page=="💬  Career Chat":
                     if any(w in q.lower() for w in ["ready","job","internship","role","apply","ai engineer","ml","skills"]):
                         all_skills = list(set((st.session_state.resume_skills or []) + (st.session_state.github_skills or [])))
                         role_q = st.session_state.get("market_role","AI Engineer")
-                        jobs = devpath_rag.retrieve_jobs(role_q, all_skills, n=3)
+                        jobs = _get_rag_instance().retrieve_jobs(role_q, all_skills, n=3)
                         if jobs:
                             rag_context += f"\nRelevant {role_q} jobs from database:\n"
                             for j in jobs[:3]:
@@ -3366,7 +3438,7 @@ elif page=="💬  Career Chat":
                     if any(w in q.lower() for w in ["learn","course","resource","study","improve","start"]):
                         gaps = [s for s,_ in st.session_state.get("market_readiness",{}).get("priority_gaps",[])[:3]] if st.session_state.get("market_readiness") else []
                         if gaps:
-                            lr = devpath_rag.retrieve_learning_resources(gaps, n=3)
+                            lr = _get_rag_instance().retrieve_learning_resources(gaps, n=3)
                             if lr:
                                 rag_context += "\nRecommended learning resources:\n"
                                 for r in lr:
@@ -3453,6 +3525,75 @@ Keep it concise but highly specific — not generic."""
 # ══════════════════════════════════════════════════════════════════════
 #  AGENTIC MODE — LangGraph Career Intelligence Loop
 # ══════════════════════════════════════════════════════════════════════
+# ── First-load initialization display ────────────────────────────────
+if "devpath_ready" not in st.session_state:
+    st.session_state.devpath_ready = False
+
+if not st.session_state.devpath_ready and page == "🤖  Agentic Mode":
+    st.markdown('''
+    <div style="min-height:60vh;display:flex;flex-direction:column;align-items:center;
+         justify-content:center;padding:40px;">
+        <div style="text-align:center;margin-bottom:32px;">
+            <div style="font-size:48px;margin-bottom:12px;">⚡</div>
+            <div style="font-size:28px;font-weight:800;color:#1E1E2E;margin-bottom:6px;">DevPath</div>
+            <div style="font-size:14px;color:#9090A8;">Agentic Career Intelligence Platform</div>
+        </div>
+    </div>''', unsafe_allow_html=True)
+
+    init_container = st.empty()
+    steps = [
+        ("Resume Intelligence Engine",  lambda: True),
+        ("GitHub Evidence Engine",       lambda: True),
+        ("Skill Evidence Matrix",        lambda: True),
+        ("Gap Priority Engine",          lambda: True),
+        ("RAG Knowledge Base",           lambda: bool(_get_rag_instance())),
+        ("LangGraph Agent Loop",         lambda: bool(_get_llm_instance())),
+    ]
+
+    completed = []
+    for label, init_fn in steps:
+        import time
+        try:
+            result = init_fn()
+            completed.append((label, result, "✓"))
+        except Exception:
+            completed.append((label, False, "✗"))
+
+        # Re-render checklist after each step
+        checklist_html = "<br>".join([
+            f'<div style="font-size:14px;color:{"#22C55E" if ok else "#EF4444"};'
+            f'font-weight:600;padding:4px 0;">{icon} {lbl}</div>'
+            for lbl, ok, icon in completed
+        ])
+        init_container.markdown(f'''
+        <div style="background:white;border:1px solid #F0EEF8;border-radius:16px;
+             padding:28px 32px;max-width:420px;margin:0 auto;
+             box-shadow:0 4px 24px rgba(120,100,200,0.10);">
+            <div style="font-size:13px;font-weight:700;color:#7C3AED;
+                 letter-spacing:1px;margin-bottom:16px;">
+                🚀 INITIALIZING DEVPATH INTELLIGENCE...
+            </div>
+            {checklist_html}
+        </div>''', unsafe_allow_html=True)
+        time.sleep(0.15)
+
+    # Final ready state
+    st.session_state.devpath_ready = True
+    init_container.markdown('''
+    <div style="background:linear-gradient(135deg,#F0FDF4,#F5F0FF);border:1.5px solid #BBF7D0;
+         border-radius:16px;padding:28px 32px;max-width:420px;margin:0 auto;text-align:center;
+         box-shadow:0 4px 24px rgba(34,197,94,0.12);">
+        <div style="font-size:32px;margin-bottom:8px;">⚡</div>
+        <div style="font-size:18px;font-weight:800;color:#16A34A;margin-bottom:4px;">
+            🧠 DevPath is ready.
+        </div>
+        <div style="font-size:12px;color:#6B6880;">
+            Upload your resume or run GitHub Analysis to begin.
+        </div>
+    </div>''', unsafe_allow_html=True)
+    import time; time.sleep(0.8)
+    st.rerun()
+
 if page=="🤖  Agentic Mode":
     ph("🤖 Agentic Career Mode","Goal → Analyze → Gap → Match → Plan → Evaluate → Adapt")
     st.markdown('<div style="padding:0 28px;">',unsafe_allow_html=True)
@@ -3526,8 +3667,8 @@ if page=="🤖  Agentic Mode":
                 st.write("🔍 **RAG Engine** retrieving career knowledge...")
                 if RAG_AVAILABLE:
                     try:
-                        devpath_rag.initialize()
-                        rag_stats = devpath_rag.get_stats()
+                        _get_rag_instance(); devpath_rag = _get_rag_instance()
+                        rag_stats = _get_rag_instance().get_stats()
                         st.write(f"✅ **RAG**: Retrieved from {sum(rag_stats.values())} knowledge records across 4 collections")
                     except Exception:
                         st.write("⚠️ **RAG**: Knowledge base unavailable")
