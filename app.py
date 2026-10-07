@@ -221,7 +221,7 @@ def _text_has_skill(text: str, skill: str) -> bool:
             continue
         # Use word-boundary regex for short terms (avoids substring false positives)
         if len(term) <= 4:
-            pattern = r'' + re.escape(term) + r''
+            pattern = r'\b' + re.escape(term) + r'\b'
         else:
             # Longer terms — substring is acceptable (e.g. "langchain" in "uses langchain")
             pattern = re.escape(term)
@@ -603,24 +603,24 @@ PRIORITY_COLOR = {
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  RAG ENGINE — genuinely lazy import
+#  RAG ENGINE — imported from rag_engine.py (single source of truth)
 # ══════════════════════════════════════════════════════════════════════
-RAG_AVAILABLE = True
-_rag_instance = None
-devpath_rag = None
+try:
+    from rag_engine import rag as _rag_instance
+    RAG_AVAILABLE = True
+except Exception as _rag_err:
+    RAG_AVAILABLE = False
+    _rag_instance = None
 
 @st.cache_resource(show_spinner=False)
 def get_rag():
-    """Load and initialize the RAG engine only when first requested."""
-    global _rag_instance
-    if _rag_instance is None:
-        try:
-            from rag_engine import rag as imported_rag
-            _rag_instance = imported_rag
-            _rag_instance.initialize()
-        except Exception:
-            return None
+    """Initialize RAG once per session — cached, never re-seeded."""
+    if not RAG_AVAILABLE or _rag_instance is None:
+        return None
+    _rag_instance.initialize()
     return _rag_instance
+
+devpath_rag = None  # initialized lazily
 
 st.set_page_config(
     page_title="DevPath — AI Career Copilot",
@@ -677,10 +677,6 @@ section[data-testid="stSidebar"] .stRadio label:hover {
 .tag-neutral { background:rgba(139,92,246,0.08);color:#7C3AED;border:1px solid rgba(139,92,246,0.15);border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;display:inline-block;margin:3px; }
 .tag-pink { background:#FFF0F7;color:#E91E63;border:1px solid #FFD6EA;border-radius:20px;padding:5px 14px;font-size:12px;font-weight:600;display:inline-block;margin:3px; }
 .tag-emerge { background:#F5F0FF;color:#7C3AED;border:1px solid #E0D9FF;border-radius:20px;padding:5px 14px;font-size:12px;font-weight:600;display:inline-block;margin:3px; }
-.skill-chip-wrap { display:flex; flex-wrap:wrap; gap:8px; align-items:center; width:100%; }
-.skill-chip-wrap .skill-chip { margin:0 !important; white-space:nowrap; }
-section.main [data-testid="stMarkdownContainer"] { color:#1E1E2E !important; }
-section.main [data-testid="stMarkdownContainer"] p, section.main [data-testid="stMarkdownContainer"] li, section.main [data-testid="stMarkdownContainer"] h1, section.main [data-testid="stMarkdownContainer"] h2, section.main [data-testid="stMarkdownContainer"] h3, section.main [data-testid="stMarkdownContainer"] h4, section.main [data-testid="stMarkdownContainer"] h5, section.main [data-testid="stMarkdownContainer"] h6 { color:#1E1E2E; }
 .skill-row { margin-bottom: 10px; }
 .skill-row-top { display:flex;justify-content:space-between;align-items:center;margin-bottom:5px; }
 .skill-name { font-size:13px;font-weight:500;color:#1E1E2E; }
@@ -721,6 +717,151 @@ div[data-testid="stTabs"] button[role="tab"] { color:#9090A8 !important; font-we
 div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] { color:#E91E63 !important; font-weight:700 !important; border-bottom:2px solid #E91E63 !important; }
 div[data-testid="stAlert"] { border-radius:12px !important; }
 hr { border-color:#F0EEF8 !important; }
+
+/* ------------------------------------------------------------------
+   Main-content Markdown readability fix
+   Streamlit inherits the active theme text color for native Markdown.
+   DevPath uses a light surface, so native Markdown (especially the
+   Job Match 2-week plan/table) must explicitly use dark text.
+   This does not override our inline HTML component colors.
+   ------------------------------------------------------------------ */
+section.main div[data-testid="stMarkdownContainer"],
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] {
+    color:#1E1E2E !important;
+}
+section.main div[data-testid="stMarkdownContainer"] p,
+section.main div[data-testid="stMarkdownContainer"] li,
+section.main div[data-testid="stMarkdownContainer"] h1,
+section.main div[data-testid="stMarkdownContainer"] h2,
+section.main div[data-testid="stMarkdownContainer"] h3,
+section.main div[data-testid="stMarkdownContainer"] h4,
+section.main div[data-testid="stMarkdownContainer"] h5,
+section.main div[data-testid="stMarkdownContainer"] h6,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] p,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] li,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h1,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h2,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h3,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h4,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h5,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h6 {
+    color:#1E1E2E !important;
+}
+section.main div[data-testid="stMarkdownContainer"] table,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] table {
+    color:#1E1E2E !important;
+    width:100%;
+}
+section.main div[data-testid="stMarkdownContainer"] th,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] th {
+    background:#F8F7FF !important;
+    color:#4A4A5A !important;
+    border-bottom:1px solid #EAE7F5 !important;
+}
+section.main div[data-testid="stMarkdownContainer"] td,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] td {
+    color:#4A4A5A !important;
+    border-bottom:1px solid #F0EEF8 !important;
+}
+section.main div[data-testid="stMarkdownContainer"] strong,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] strong {
+    color:#1E1E2E !important;
+}
+section.main div[data-testid="stMarkdownContainer"] a,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] a {
+    color:#C2185B !important;
+}
+section.main div[data-testid="stMarkdownContainer"] code,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] code {
+    color:#6D28D9 !important;
+    background:#F5F0FF !important;
+}
+section.main div[data-testid="stMarkdownContainer"] blockquote,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] blockquote {
+    color:#4A4A5A !important;
+    border-left-color:#E91E63 !important;
+}
+
+/* ==================================================================
+   DEVPATH GLOBAL NATIVE MARKDOWN SAFETY LAYER
+   Native Streamlit Markdown must stay readable on the light surface.
+   These selectors intentionally target semantic Markdown elements only;
+   custom inline HTML cards keep their own explicit colors.
+   ================================================================== */
+section[data-testid="stMain"] .stMarkdown,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] {
+    color: #1E1E2E !important;
+}
+section[data-testid="stMain"] .stMarkdown p,
+section[data-testid="stMain"] .stMarkdown li,
+section[data-testid="stMain"] .stMarkdown h1,
+section[data-testid="stMain"] .stMarkdown h2,
+section[data-testid="stMain"] .stMarkdown h3,
+section[data-testid="stMain"] .stMarkdown h4,
+section[data-testid="stMain"] .stMarkdown h5,
+section[data-testid="stMain"] .stMarkdown h6,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] p,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] li,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h1,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h2,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h3,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h4,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h5,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] h6 {
+    color: #1E1E2E !important;
+}
+section[data-testid="stMain"] .stMarkdown table,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] table {
+    width: 100% !important;
+    color: #1E1E2E !important;
+    border-collapse: collapse !important;
+}
+section[data-testid="stMain"] .stMarkdown th,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] th {
+    background: #F8F7FF !important;
+    color: #3F3B52 !important;
+    border-bottom: 1px solid #E6E1F2 !important;
+    padding: 9px 10px !important;
+    text-align: left !important;
+}
+section[data-testid="stMain"] .stMarkdown td,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] td {
+    color: #4A465A !important;
+    border-bottom: 1px solid #F0EEF8 !important;
+    padding: 9px 10px !important;
+    vertical-align: top !important;
+}
+section[data-testid="stMain"] .stMarkdown strong,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] strong {
+    color: #1E1E2E !important;
+}
+section[data-testid="stMain"] .stMarkdown a,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] a {
+    color: #C2185B !important;
+    text-decoration: none !important;
+    font-weight: 600 !important;
+}
+section[data-testid="stMain"] .stMarkdown a:hover,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] a:hover {
+    color: #E91E63 !important;
+    text-decoration: underline !important;
+}
+section[data-testid="stMain"] .stMarkdown code,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] code {
+    color: #5B21B6 !important;
+    background: #F5F0FF !important;
+    border-radius: 5px !important;
+    padding: 2px 5px !important;
+}
+section[data-testid="stMain"] .stMarkdown blockquote,
+section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] blockquote {
+    color: #4A465A !important;
+    border-left-color: #E91E63 !important;
+}
+/* Markdown created inside the main content must never inherit white text. */
+section[data-testid="stMain"] .stMarkdown p a,
+section[data-testid="stMain"] .stMarkdown li a { color: #C2185B !important; }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -985,46 +1126,6 @@ def compute_ats_score(resume_text: str) -> dict:
             "has_linkedin":has_linkedin,"has_github_link":has_github,"word_count":wc,"verb_count":vc,"quant_count":qc}
 
 # ══════════════════════════════════════════════════════════════════════
-#  SHARED DISPLAY HELPERS — one source of truth for labels/chips
-# ══════════════════════════════════════════════════════════════════════
-ATS_GRADE_BANDS = ((93, "Excellent"), (85, "Strong"), (80, "Good"),
-                   (70, "Average"), (50, "Weak"), (0, "Needs Work"))
-
-def ats_grade(score: int) -> str:
-    score = max(0, min(100, int(score or 0)))
-    for minimum, label in ATS_GRADE_BANDS:
-        if score >= minimum:
-            return label
-    return "Needs Work"
-
-
-def display_skill_name(skill: str) -> str:
-    canonical = normalize_skill(skill) if skill else ""
-    labels = {
-        "llm":"LLM / GenAI", "openai api":"OpenAI API", "github-api":"GitHub API",
-        "rest api":"REST API", "ci/cd":"CI/CD", "scikit-learn":"Scikit-learn",
-        "machine learning":"Machine Learning", "deep learning":"Deep Learning",
-        "vector database":"Vector Database", "prompt engineering":"Prompt Engineering",
-        "fastapi":"FastAPI", "langchain":"LangChain", "langgraph":"LangGraph",
-        "pytorch":"PyTorch", "tensorflow":"TensorFlow", "streamlit":"Streamlit"
-    }
-    return labels.get(canonical, canonical.title() if canonical else str(skill).strip())
-
-
-def render_skill_chips(skills, prefix="", css_class="tag-neutral") -> None:
-    items=[]; seen=set()
-    for skill in skills or []:
-        canonical=normalize_skill(str(skill))
-        if not canonical or canonical in seen: continue
-        seen.add(canonical)
-        label=f"{prefix}{display_skill_name(canonical)}"
-        items.append(f'<span class="{css_class} skill-chip">{label}</span>')
-    if items:
-        st.markdown('<div class="skill-chip-wrap">'+''.join(items)+'</div>', unsafe_allow_html=True)
-    else:
-        st.caption("None detected")
-
-# ══════════════════════════════════════════════════════════════════════
 #  PHASE 1 — Resume Intelligence: robust skill extraction
 # ══════════════════════════════════════════════════════════════════════
 
@@ -1165,7 +1266,6 @@ Do NOT output reasoning, thinking, or analysis process.
 Do NOT invent anything not present in the resume.
 Do NOT mention the candidate's name.
 Be specific, evidence-based, and recruiter-readable.
-Never describe work as "production-grade", "production-ready", "enterprise-grade", or "verified" unless the resume explicitly provides evidence for that exact claim. Do not infer deployment quality, scale, latency, reliability, or business impact from a technology name alone.
 
 Use EXACTLY these section headers (copy them exactly):
 
@@ -1190,7 +1290,7 @@ Example: AI Engineer | Strong | LangChain + RAG projects + Python
 ##STRENGTHS##
 List 3-5 specific strengths with evidence from the resume.
 Each strength must cite a specific skill, project, or achievement.
-NOT generic. Example: "RAG implementation in the devpath-agent project demonstrates retrieval-based LLM application development."
+NOT generic. Example: "RAG implementation in devpath-agent project shows production LLM engineering."
 
 ##GAPS##
 List 3-4 specific gaps — not generic advice.
@@ -1200,8 +1300,8 @@ Example: "No evidence of model evaluation or ML experimentation — critical for
 ##PRIORITY_ACTIONS##
 List 4-5 ranked actions as P0/P1/P2.
 P0 = do this week. P1 = this month. P2 = next 60 days.
-Each action must be specific and achievable. Never invent, estimate, or suggest a fake performance metric. If a metric is unavailable, recommend measuring it first.
-Example: "P0 — Add 2–3 quantified outcomes to project bullets using only metrics that can be verified from the user's actual work."
+Each action must be specific and achievable.
+Example: "P0 — Add quantified outcomes to 3 project bullets (e.g., reduced latency by 40%)"
 
 ##FINAL_VERDICT##
 One short paragraph. Recruiter-style summary.
@@ -1929,87 +2029,63 @@ Please run the full analysis:
 #  RAG EVALUATOR — Checks its own math
 #  Scores every RAG response for groundedness before showing it
 # ══════════════════════════════════════════════════════════════════════
-def evaluate_rag_response(query: str, retrieved_context: str, response: str) -> dict:
-    """
-    Self-evaluation node: scores RAG response for groundedness.
-    Uses a second LLM call to check if the answer is grounded in context.
-    Returns Context Relevancy % and Hallucination Risk level.
-    """
-    eval_prompt = f"""You are an AI evaluation system. Score the following RAG response.
+def evaluate_rag_response(query: str, profile_context: str, retrieved_context: str, response: str) -> dict:
+    '''Strict RAG evaluator. Profile facts and retrieved knowledge are separate evidence layers.'''
+    if not response or not response.strip():
+        return {"context_relevancy":0,"groundedness":0,"hallucination_risk":"High","reasoning":"No answer was generated.","evaluated":False}
+    if not retrieved_context.strip():
+        return {"context_relevancy":0,"groundedness":0,"hallucination_risk":"High","reasoning":"No RAG evidence was retrieved; answer is not RAG-certified.","evaluated":False}
+    prompt=f'''You are a strict evidence evaluator for DevPath Career Chat.
 
-QUERY: {query}
+USER QUESTION:
+{query}
 
-RETRIEVED CONTEXT:
-{retrieved_context[:800]}
+TRUSTED PROFILE FACTS (candidate source of truth):
+{profile_context[:6000]}
 
-GENERATED RESPONSE:
-{response[:600]}
+RETRIEVED KNOWLEDGE (source for external/general claims):
+{retrieved_context[:10000]}
 
-Evaluate and return ONLY this JSON (no other text):
-{{
-  "context_relevancy": 87,
-  "groundedness": 92,
-  "hallucination_risk": "Low",
-  "reasoning": "Response is grounded in retrieved context with minor extrapolation"
-}}
+GENERATED ANSWER:
+{response[:12000]}
+
+Return ONLY valid JSON:
+{{"context_relevancy":0,"groundedness":0,"hallucination_risk":"High","reasoning":"one concise sentence"}}
 
 Rules:
-- context_relevancy (0-100): How relevant is the retrieved context to the query?
-- groundedness (0-100): How well does the response stick to the retrieved context?
-- hallucination_risk: "Low" (>80% grounded), "Medium" (50-80%), "High" (<50%)
-- reasoning: One sentence explanation"""
-
+- Profile facts may support candidate-specific statements about scores, skills, gaps and project evidence.
+- General career, market, salary, company, statistics, ROI, projected score changes and factual learning claims must be supported by retrieved knowledge or clearly labeled as general advice.
+- Never reward invented salary numbers, invented performance gains, score guarantees, or claims that a course will raise a score by a fixed amount.
+- context_relevancy is 0-100 for how useful the retrieved knowledge is to the question.
+- groundedness is 0-100 for evidence support of the answer.
+- Low risk only >=85 groundedness; Medium 60-84; High <60.'''
     try:
-        raw = ask_llm(eval_prompt)
-        import json as _json
-        # Extract JSON
-        start = raw.find("{")
-        end   = raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            parsed = _json.loads(raw[start:end])
-            return {
-                "context_relevancy": int(parsed.get("context_relevancy", 85)),
-                "groundedness":      int(parsed.get("groundedness", 85)),
-                "hallucination_risk": parsed.get("hallucination_risk", "Low"),
-                "reasoning":         parsed.get("reasoning", ""),
-                "evaluated":         True,
-            }
+        raw=ask_llm(prompt)
+        a=raw.find('{'); b=raw.rfind('}')+1
+        if a>=0 and b>a:
+            data=json.loads(raw[a:b])
+            g=max(0,min(100,int(data.get('groundedness',0))))
+            c=max(0,min(100,int(data.get('context_relevancy',0))))
+            risk=str(data.get('hallucination_risk','High'))
+            risk = risk if risk in {'Low','Medium','High'} else ('Low' if g>=85 else 'Medium' if g>=60 else 'High')
+            return {"context_relevancy":c,"groundedness":g,"hallucination_risk":risk,"reasoning":str(data.get('reasoning',''))[:180],"evaluated":True}
     except Exception:
         pass
-    return {
-        "context_relevancy": 85,
-        "groundedness":      85,
-        "hallucination_risk": "Low",
-        "reasoning":         "Evaluation unavailable",
-        "evaluated":         False,
-    }
+    return {"context_relevancy":0,"groundedness":0,"hallucination_risk":"High","reasoning":"Evaluation failed; answer is not certified as grounded.","evaluated":False}
 
 def render_rag_eval_badge(eval_result: dict):
-    """Render the RAG evaluation badge inline in Streamlit."""
-    cr  = eval_result.get("context_relevancy", 85)
-    gnd = eval_result.get("groundedness", 85)
-    risk = eval_result.get("hallucination_risk", "Low")
-    risk_color = {"Low":"#22C55E","Medium":"#F59E0B","High":"#EF4444"}.get(risk,"#22C55E")
-    cr_color   = "#22C55E" if cr>=80 else "#F59E0B" if cr>=60 else "#EF4444"
-    st.markdown(f"""
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 12px;">
-        <span style="background:{cr_color}18;color:{cr_color};border:1px solid {cr_color}44;
-            border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;">
-            📊 Context Relevancy: {cr}%
-        </span>
-        <span style="background:{cr_color}18;color:{cr_color};border:1px solid {cr_color}44;
-            border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;">
-            🎯 Groundedness: {gnd}%
-        </span>
-        <span style="background:{risk_color}18;color:{risk_color};border:1px solid {risk_color}44;
-            border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;">
-            🛡️ Hallucination Risk: {risk}
-        </span>
-        <span style="font-size:10px;color:#9090A8;font-style:italic;">
-            {eval_result.get("reasoning","")[:80]}
-        </span>
-    </div>""", unsafe_allow_html=True)
-
+    cr=int(eval_result.get('context_relevancy',0)); gnd=int(eval_result.get('groundedness',0))
+    risk=eval_result.get('hallucination_risk','High'); evaluated=bool(eval_result.get('evaluated',False))
+    risk_color={'Low':'#16A34A','Medium':'#D97706','High':'#DC2626'}.get(risk,'#DC2626')
+    cr_color='#16A34A' if cr>=80 else '#D97706' if cr>=60 else '#DC2626'
+    g_color='#16A34A' if gnd>=85 else '#D97706' if gnd>=60 else '#DC2626'
+    status='Evaluated' if evaluated else 'Not certified'
+    st.markdown(f'''<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 12px;">
+      <span style="background:{cr_color}18;color:{cr_color};border:1px solid {cr_color}44;border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;">📊 Context Relevancy: {cr}%</span>
+      <span style="background:{g_color}18;color:{g_color};border:1px solid {g_color}44;border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;">🎯 Groundedness: {gnd}%</span>
+      <span style="background:{risk_color}18;color:{risk_color};border:1px solid {risk_color}44;border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;">🛡️ Hallucination Risk: {risk}</span>
+      <span style="font-size:10px;color:#6B6880;font-style:italic;">{status} · {eval_result.get('reasoning','')[:120]}</span>
+    </div>''',unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════
 #  RESUME REPAIR ENGINE — Generates optimized ATS-compliant PDF
@@ -2277,7 +2353,7 @@ with st.sidebar:
 
 # ── Helpers ───────────────────────────────────────────────────────────
 def ph(title,subtitle=""):
-    st.markdown(f'<div style="margin-bottom:16px;padding:20px 28px 0;"><div style="font-size:24px;font-weight:800;color:#1E1E2E;letter-spacing:-0.5px;">{title}</div>{f"<div style=font-size:13px;color:#9090A8;margin-top:2px;>{subtitle}</div>" if subtitle else ""}</div>',unsafe_allow_html=True)
+    st.markdown(f'<div style="margin-bottom:16px;padding:20px 28px 0;"><div style="font-size:24px;font-weight:800;color:#1E1E2E;letter-spacing:-0.5px;">{title}</div>{f"<div style=\"font-size:13px;color:#9090A8;margin-top:2px;\">{subtitle}</div>" if subtitle else ""}</div>',unsafe_allow_html=True)
 
 def cs(title="",subtitle="",style=""):
     st.markdown(f'<div class="dp-card" style="{style}">',unsafe_allow_html=True)
@@ -2307,6 +2383,90 @@ def sbar(skill, pct, have_it=None, show_status=False, label="Hiring Demand"):
     </div>""", unsafe_allow_html=True)
 
 
+
+# ══════════════════════════════════════════════════════════════════════
+#  FINAL EVIDENCE-FIRST HELPERS
+#  No LLM-generated numbers or candidate facts are allowed here.
+# ══════════════════════════════════════════════════════════════════════
+EVIDENCE_WEIGHTS_FINAL = {"Confirmed":1.00,"Strong":0.75,"Partial":0.45,"Weak":0.20,"Not Found":0.00}
+
+def get_candidate_skills():
+    sm=st.session_state.get("skill_matrix") or {}
+    if sm:
+        return sorted(sm.keys())
+    return normalize_skill_list((st.session_state.get("resume_skills") or [])+(st.session_state.get("github_skills") or []))
+
+def evidence_level_for(skill):
+    sm=st.session_state.get("skill_matrix") or {}
+    data=sm.get(normalize_skill(skill),{})
+    return data.get("evidence_level", "Not Found")
+
+def build_deterministic_two_week_plan(missing_skills, role="target role"):
+    """Build an actionable plan from actual missing JD skills, with no fabricated outcomes."""
+    skills=[normalize_skill(s) for s in missing_skills if s]
+    skills=list(dict.fromkeys(skills))[:8]
+    if not skills:
+        return "### 2-Week Action Plan\nNo missing skills were detected from the supplied job description. Focus on interview practice and collecting stronger evidence for the skills you already claim."
+    lines=["### 2-Week Action Plan",f"Target: **{role}**","", "The plan is generated from the missing requirements above. It does not predict a score increase.", ""]
+    for i,skill in enumerate(skills):
+        week="Week 1" if i < 4 else "Week 2"
+        lines.append(f"- **{week} · {skill.title()}** — learn the core concepts, build one small hands-on example, and commit the evidence to GitHub.")
+    lines += ["", "**Evidence target:** for each gap, produce one concrete artifact (code, test, deployment, architecture note, or documented experiment) before adding the skill to your resume."]
+    return "\n".join(lines)
+
+def build_market_insight(role, readiness, market_data):
+    gaps=readiness.get("priority_gaps",[])[:3]
+    matched=list(readiness.get("matched",{}).keys())[:5]
+    if not market_data or not market_data.get("skills"):
+        return "No benchmark data is available for this role, so DevPath will not invent market-demand or salary claims. Use the Job Match and GitHub evidence modules for role-specific decisions."
+    gap_text=", ".join(f"{s} ({d}% benchmark demand)" for s,d in gaps) or "none in the benchmark"
+    matched_text=", ".join(s.title() for s in matched) or "none"
+    return (f"For **{role}**, the prototype benchmark shows strongest alignment in {matched_text}. "
+            f"The highest-demand missing benchmark skills are {gap_text}. "
+            f"Market readiness is a deterministic weighted benchmark, not a prediction of hiring probability. "
+            f"Prioritize one high-demand gap at a time and add verifiable GitHub evidence before claiming it professionally.")
+
+def build_role_recommendations(candidate_skills, top_n=4):
+    """Deterministic role fit from prototype role requirements; never ask an LLM for match percentages."""
+    user={normalize_skill(s) for s in candidate_skills}
+    sm=st.session_state.get("skill_matrix") or {}
+    scored=[]
+    for role,data in ROLE_MARKET_DATA.items():
+        req=data.get("skills",{})
+        if not req: continue
+        total=sum(req.values())
+        covered=0
+        matched=[]
+        for skill,demand in req.items():
+            canon=normalize_skill(skill)
+            level=(sm.get(canon,{}) or {}).get("evidence_level")
+            weight=EVIDENCE_WEIGHTS_FINAL.get(level, 1.0 if canon in user else 0.0)
+            covered += demand*weight
+            if weight>=0.75: matched.append(skill)
+        fit=round((covered/total)*100) if total else 0
+        scored.append({"role":role,"match":fit,"reason":f"Strongest verified overlap: {', '.join(matched[:4]) or 'no confirmed overlap'}.","search":"LinkedIn, Indeed","matched":matched})
+    return sorted(scored,key=lambda x:(-x['match'],x['role']))[:top_n]
+
+def retrieve_interview_questions_grounded(role, difficulty, n=5):
+    """Retrieve exact stored questions; filter by metadata; never rewrite RAG questions."""
+    if not RAG_AVAILABLE: return []
+    try:
+        rag_obj=_get_rag_instance()
+        raw=rag_obj.retrieve("interviews", f"{role} technical interview {difficulty}", n=max(10,n*3))
+        exact=[r for r in raw if str(r.get("metadata",{}).get("difficulty","")).lower()==difficulty.lower()]
+        pool=exact or raw
+        seen=set(); out=[]
+        for r in pool:
+            q=r.get("metadata",{}).get("question") or r.get("document","")
+            if q in seen: continue
+            seen.add(q)
+            md=r.get("metadata",{})
+            out.append({"question":q,"hint":md.get("hint",""),"difficulty":md.get("difficulty",difficulty),"topic":md.get("topic",""),"role":md.get("role",role),"retrieval_distance":r.get("distance")})
+            if len(out)>=n: break
+        return out
+    except Exception:
+        return []
+
 # ══════════════════════════════════════════════════════════════════════
 #  PAGE ROUTING — Agentic Mode handled above (appended at end)
 # ══════════════════════════════════════════════════════════════════════
@@ -2329,7 +2489,7 @@ if page=="🏠  Overview":
             st.markdown(f'<div class="dp-card-sm" style="text-align:center;"><div style="font-size:11px;color:#9090A8;font-weight:600;margin-bottom:8px;">DevPath Score</div><div style="width:60px;height:60px;background:linear-gradient(135deg,#E91E63,#F06292);border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 8px;box-shadow:0 6px 18px rgba(233,30,99,0.3);"><span style="font-size:22px;font-weight:900;color:white;">{dv or "—"}</span></div><div style="font-size:11px;font-weight:600;color:{lc};">{lvl}</div><div style="height:3px;background:linear-gradient(90deg,#E91E63,#F06292);border-radius:99px;margin-top:8px;"></div></div>',unsafe_allow_html=True)
         for col,label,val,gfn in [
             (sc2,"Portfolio Score",p["portfolio_score"] if p else None,lambda v:"Good" if v>=60 else "Fair"),
-            (sc3,"ATS Score",st.session_state.ats_score,ats_grade),
+            (sc3,"ATS Score",st.session_state.ats_score,lambda v:"Strong" if v>=75 else "Fair"),
             (sc4,"Credibility",rc["score"] if rc else None,lambda v:"Needs Work" if v<50 else "Good"),
             (sc5,"Job Match",jm["score"] if jm else None,lambda v:"Good Match" if v>=60 else "Fair"),
         ]:
@@ -2464,7 +2624,7 @@ if page=="🏠  Overview":
         cs("Emerging Skills 2026")
         md=st.session_state.get("market_data")
         sl=md["emerging"] if md else ["RAG","LangGraph","Vector DBs","Prompt Eng.","Agentic AI","Fine-tuning"]
-        st.markdown("".join(f'<span class="tag-emerge">↑ {s}</span>' for s in sl),unsafe_allow_html=True)
+        st.markdown('<div style="display:flex;flex-wrap:wrap;gap:6px;">'+"".join(f'<span class="tag-emerge" style="margin:0;">↑ {s}</span>' for s in sl)+'</div>',unsafe_allow_html=True)
         ce()
     with b3:
         st.markdown('<div class="quote-block"><div style="font-size:32px;color:#E91E63;margin-bottom:8px;">"</div><div style="font-size:13px;color:#4A4A5A;line-height:1.6;font-style:italic;">The best investment you can make is in yourself. Keep building.</div><div style="font-size:11px;color:#9090A8;margin-top:10px;font-weight:600;">— DevPath AI Copilot</div></div>',unsafe_allow_html=True)
@@ -2586,7 +2746,7 @@ elif page=="📄  Resume Intelligence":
         with c1:
             sc=st.session_state.ats_score
             scc="#22C55E" if sc>=70 else "#F59E0B" if sc>=50 else "#E91E63"
-            gr=ats_grade(sc)
+            gr="Strong" if sc>=80 else "Good" if sc>=65 else "Fair" if sc>=50 else "Needs Work"
             cs("🎯 ATS Score","5-category computed engine")
             st.markdown(f'<div style="font-size:64px;font-weight:900;color:{scc};line-height:1;text-align:center;">{sc}</div><div style="text-align:center;font-size:13px;color:#9090A8;margin-bottom:12px;">/100 · {gr}</div>',unsafe_allow_html=True)
             st.progress(sc/100)
@@ -2607,13 +2767,13 @@ elif page=="📄  Resume Intelligence":
             ce()
             if st.session_state.ats_data["found_keywords"]:
                 cs("🔑 Tech Keywords Found")
-                render_skill_chips(st.session_state.ats_data["found_keywords"][:20])
-                st.markdown(f'<div style="font-size:11px;color:#9090A8;margin-top:8px;">{len(st.session_state.ats_data["found_keywords"])} keywords</div>',unsafe_allow_html=True)
+                badges="".join(f'<span class="tag-neutral" style="margin:3px;display:inline-block;">{k.title()}</span>' for k in st.session_state.ats_data["found_keywords"][:20])
+                st.markdown(f'<div style="line-height:2.4;">{badges}</div><div style="font-size:11px;color:#9090A8;margin-top:8px;">{len(st.session_state.ats_data["found_keywords"])} keywords</div>',unsafe_allow_html=True)
                 ce()
     if st.session_state.resume_skills:
         st.markdown("<br>",unsafe_allow_html=True)
         cs("🛠️ Extracted Skills")
-        render_skill_chips(st.session_state.resume_skills)
+        st.markdown('<div style="display:flex;flex-wrap:wrap;gap:6px;">'+"".join(f'<span class="tag-neutral" style="margin:0;">{s}</span>' for s in st.session_state.resume_skills)+'</div>',unsafe_allow_html=True)
         ce()
     if st.session_state.resume_analysis:
         st.markdown("<br>",unsafe_allow_html=True)
@@ -2738,7 +2898,7 @@ elif page=="🐙  GitHub Analysis":
         if st.session_state.github_skills:
             st.markdown("<br>",unsafe_allow_html=True)
             cs("🛠️ Skills Evidenced from GitHub")
-            render_skill_chips(st.session_state.github_skills)
+            st.markdown('<div style="display:flex;flex-wrap:wrap;gap:6px;">'+"".join(f'<span class="tag-neutral" style="margin:0;">{s}</span>' for s in st.session_state.github_skills)+'</div>',unsafe_allow_html=True)
             ce()
         st.markdown("<br>",unsafe_allow_html=True)
         cs("📁 Top Repositories")
@@ -2760,7 +2920,11 @@ elif page=="🌉  Reality Check":
         if st.button("🌉 Run Reality Check"):
             with st.spinner("Comparing..."):
                 overlap=compute_overlap(st.session_state.resume_skills,st.session_state.github_skills)
-                overlap["recommendation"]=ask_llm(f"Verified:{overlap['verified']}\nUnverified:{overlap['unverified']}\n2-3 specific honest sentences to close the gap.")
+                if overlap["unverified"]:
+                    overlap["recommendation"]=(f"{len(overlap['unverified'])} claimed skills do not yet have matching GitHub evidence. "
+                                                 "Build concrete repository/file evidence for the highest-priority gaps before treating them as verified.")
+                else:
+                    overlap["recommendation"]="All currently claimed skills have matching GitHub evidence in the analyzed profile."
                 st.session_state.reality_check=overlap
             log_activity("Reality Check done","🌉"); st.success("✅ Done!")
     if st.session_state.reality_check:
@@ -2861,7 +3025,7 @@ elif page=="🌉  Reality Check":
             </div>""", unsafe_allow_html=True)
         if rc.get("extra"):
             st.markdown('<br><div style="font-size:14px;font-weight:700;color:#1E1E2E;margin-bottom:8px;">💎 Hidden Strengths (on GitHub, not on Resume)</div>',unsafe_allow_html=True)
-            render_skill_chips(rc.get("extra", []), prefix="+ ")
+            st.markdown('<div style="display:flex;flex-wrap:wrap;gap:6px;">'+"".join(f'<span class="tag-neutral" style="margin:0;">+ {s}</span>' for s in rc["extra"])+'</div>',unsafe_allow_html=True)
         st.markdown(f'<div style="background:#FFF5F7;border:1px solid #FFD6E0;border-left:4px solid #E91E63;border-radius:12px;padding:14px 18px;margin-top:14px;"><div style="font-size:11px;font-weight:700;color:#E91E63;margin-bottom:6px;letter-spacing:1px;">💡 RECOMMENDATION</div><div style="font-size:13px;color:#4A4A5A;line-height:1.6;">{rc.get("recommendation","")}</div></div>',unsafe_allow_html=True)
         ce()
     st.markdown('</div>',unsafe_allow_html=True)
@@ -2950,10 +3114,7 @@ elif page=="💼  Job Match":
                 overlap["partial"]   = []
                 overlap["source"]    = "Resume Skills (binary match)"
 
-            overlap["plan"] = ask_llm(
-                f"JD requires: {jd_skills}\nCandidate has: {st.session_state.resume_skills}\n"
-                f"Missing: {overlap['unverified']}\nWrite a specific 2-week prep plan."
-            )
+            overlap["plan"] = build_deterministic_two_week_plan(overlap["unverified"], role="the supplied job description")
             st.session_state.job_match = overlap
 
         log_activity("Job Match done","💼")
@@ -2977,15 +3138,15 @@ elif page=="💼  Job Match":
         c3,c4,c5=st.columns(3)
         with c3:
             cs("✅ Confirmed / Strong")
-            st.markdown("".join(f'<span class="tag-good">✓ {s}</span>' for s in jm["verified"]) or "None yet",unsafe_allow_html=True)
+            st.markdown('<div style="display:flex;flex-wrap:wrap;gap:6px;">'+"".join(f'<span class="tag-good" style="margin:0;">✓ {s}</span>' for s in jm["verified"])+'</div>' if jm["verified"] else "None yet",unsafe_allow_html=True)
             ce()
         with c4:
             cs("⚠️ Partial Evidence")
-            render_skill_chips(jm.get("partial", []), prefix="~ ")
+            st.markdown('<div style="display:flex;flex-wrap:wrap;gap:6px;">'+"".join(f'<span class="tag-neutral" style="margin:0;">~ {s}</span>' for s in jm.get("partial",[]))+'</div>' if jm.get("partial") else "None",unsafe_allow_html=True)
             ce()
         with c5:
             cs("❌ Not Found")
-            st.markdown("".join(f'<span class="tag-bad">✗ {s}</span>' for s in jm["unverified"]) or "🎉 Full match!",unsafe_allow_html=True)
+            st.markdown('<div style="display:flex;flex-wrap:wrap;gap:6px;">'+"".join(f'<span class="tag-bad" style="margin:0;">✗ {s}</span>' for s in jm["unverified"])+'</div>' if jm["unverified"] else "🎉 Full match!",unsafe_allow_html=True)
             ce()
 
         # Show per-skill evidence breakdown
@@ -3105,20 +3266,26 @@ elif page=="📈  Market Intelligence":
             st.warning("Run Resume Intelligence or GitHub Analysis first.")
         else:
             with st.spinner("Computing market readiness..."):
+                if not md and RAG_AVAILABLE:
+                    try:
+                        retrieved=_get_rag_instance().retrieve_jobs(target_role, user_skills, n=5)
+                    except Exception:
+                        retrieved=[]
+                    if retrieved:
+                        skill_votes={}
+                        for job in retrieved:
+                            for s in job.get("skills",[]):
+                                canon=normalize_skill(s)
+                                skill_votes[canon]=skill_votes.get(canon,0)+1
+                        sd={s:min(95,40+v*10) for s,v in skill_votes.items()}
+                        md={"demand":"Prototype benchmark","demand_trend":"Not available","salary_india":"Not available","salary_us":"Not available",
+                            "top_companies":sorted({j.get("company","Unknown") for j in retrieved})[:5],"skills":sd,"emerging":[],
+                            "description":f"RAG-derived role benchmark for {target_role}; not live market data."}
                 if not md:
-                    raw=ask_llm(f"For '{target_role}' in 2026, list top 10 skills with demand %. Format: python:90,sql:75,... only.")
-                    sd={}
-                    for item in raw.split(","):
-                        if ":" in item:
-                            k,v=item.strip().split(":",1)
-                            try: sd[k.strip().lower()]=int(v.strip())
-                            except: pass
-                    md={"demand":"Active","demand_trend":"Growing","salary_india":"₹6L–₹20L","salary_us":"$75K–$140K",
-                        "top_companies":["Various"],"skills":sd,"emerging":[],"description":f"Market data for {target_role}."}
-                readiness=compute_market_readiness(user_skills,md["skills"])
-            with st.spinner("Generating AI insights..."):
-                gap_list=[f"{s} ({d}% demand)" for s,d in readiness["priority_gaps"][:5]]
-                ai_insight=ask_llm(f"Role:{target_role}, Readiness:{readiness['score']}%\nMatched:{list(readiness['matched'].keys())[:6]}, Gaps:{gap_list}\nWrite 3-4 sentences: market competitiveness, biggest gaps impact, one fast action.")
+                    md={"demand":"No benchmark","demand_trend":"Not available","salary_india":"Not available","salary_us":"Not available",
+                        "top_companies":[],"skills":{},"emerging":[],"description":"No verified benchmark data is available for this custom role."}
+                readiness=compute_market_readiness(user_skills,md.get("skills",{}))
+                ai_insight=build_market_insight(target_role,readiness,md)
             st.session_state.market_role=target_role; st.session_state.market_data=md
             st.session_state.market_readiness=readiness; st.session_state.market_ai_insight=ai_insight
             log_activity(f"Market analysis: {target_role}","📈"); st.success("✅ Done!")
@@ -3195,8 +3362,22 @@ elif page=="🗺️  Career Roadmap":
         if "error" in gdata: st.error(gdata["error"])
         else:
             with st.spinner("Computing..."):
-                rsr = ask_llm(f"List top 8-10 skills for '{goal}' in 2026. Comma-separated only.")
-                rs = [normalize_skill(s.strip()) for s in rsr.split(",") if s.strip()]
+                resolved_role=get_closest_role(goal)
+                role_data=ROLE_MARKET_DATA.get(resolved_role) if resolved_role else None
+                if role_data:
+                    rs=list(role_data.get("skills",{}).keys())
+                else:
+                    retrieved_role=[]
+                    if RAG_AVAILABLE:
+                        try:
+                            retrieved_role=_get_rag_instance().retrieve_jobs(goal, list((st.session_state.github_skills or [])+(st.session_state.resume_skills or [])), n=5)
+                        except Exception:
+                            retrieved_role=[]
+                    rs=[]
+                    for job in retrieved_role:
+                        rs.extend(job.get("skills",[]))
+                    rs=normalize_skill_list(rs)[:10]
+                rs=normalize_skill_list(rs)
 
                 # Use Skill Matrix for readiness if available — otherwise fallback
                 if st.session_state.get("skill_matrix"):
@@ -3220,7 +3401,19 @@ elif page=="🗺️  Career Roadmap":
                         elif any(normalize_skill(k) == skill for k in known): cov[skill] = 50
                         else: cov[skill] = 0
                 st.session_state.skill_coverage = cov
-                st.session_state.roadmap=ask_llm(f"Skills:{list(known)}\nTarget:{goal}\nRequired:{rsr}\nGive:\n1. SKILLS ALREADY HELD\n2. SKILL GAPS\n3. 30-60-90 day numbered checklist (short specific items)\n4. TODAY first step")
+                held=[s for s,v in cov.items() if v>=75]
+                gaps=[s for s,v in cov.items() if v<75]
+                roadmap_lines=[f"## 30-60-90 Day Plan — {goal}","","### 1. Skills already evidenced"]
+                roadmap_lines += [f"- {s.title()} — {cov[s]}% readiness" for s in held[:12]] or ["- No target-role skills have strong evidence yet."]
+                roadmap_lines += ["","### 2. Skill gaps"]
+                roadmap_lines += [f"- **{s.title()}** — current evidence: {cov[s]}%. Build one verifiable artifact before claiming it." for s in gaps[:10]] or ["- No material gaps in the selected benchmark."]
+                roadmap_lines += ["","### 3. 30-60-90 checklist"]
+                roadmap_lines += [f"1. **Days 1–30:** Build and test one small artifact for {', '.join(s.title() for s in gaps[:3]) or 'your weakest evidenced skills' }.",
+                                  f"2. **Days 31–60:** Deploy/document the strongest artifact and add tests, README evidence, and architecture notes.",
+                                  f"3. **Days 61–90:** Use the evidence in your resume, Job Match, and interview preparation; apply to roles where the verified overlap is strongest.",
+                                  "4. **Evidence rule:** do not add a skill to the resume solely because you studied it; add it after you can point to a concrete artifact.",
+                                  "","### 4. Today","Choose the highest-priority gap above and create a small GitHub issue with a measurable deliverable."]
+                st.session_state.roadmap="\n".join(roadmap_lines)
             log_activity(f"Roadmap: {goal}","🗺️"); st.success("✅ Done!")
     ce()
     if st.session_state.get("skill_coverage"):
@@ -3251,19 +3444,24 @@ elif page=="👔  Recruiter View":
         st.warning("Run GitHub Analysis or Resume Intelligence first.")
     else:
         if st.button("👔 Generate Recruiter Summary"):
-            with st.spinner("Generating..."):
-                tp=[r["name"] for r in st.session_state.portfolio["ranked_repos"][:3]] if st.session_state.portfolio else []
-                st.session_state.recruiter_summary=ask_llm(f"""Senior technical recruiter assessment.
-GitHub Skills:{st.session_state.github_skills or 'N/A'}, Resume Skills:{st.session_state.resume_skills or 'N/A'}
-Portfolio:{st.session_state.portfolio['portfolio_score'] if st.session_state.portfolio else 'N/A'}/100
-Credibility:{st.session_state.reality_check['score'] if st.session_state.reality_check else 'N/A'}%
-Job Match:{st.session_state.job_match['score'] if st.session_state.job_match else 'N/A'}%
-Top Projects:{tp}, ATS:{st.session_state.ats_score or 'N/A'}/100
-Write with EXACTLY these sections:
-CANDIDATE PROFILE: (2 sentences)
-TOP STRENGTHS: (3 bullets with specific skills)
-AREAS TO DEVELOP: (2 bullets)
-HIRING RECOMMENDATION: (Strong Hire/Hire/Consider/Pass) + 1 sentence reason""")
+            sm=st.session_state.get("skill_matrix") or {}
+            strong=sorted([k for k,v in sm.items() if v.get("evidence_level") in ("Confirmed","Strong")])[:8]
+            gaps=sorted([k for k,v in sm.items() if v.get("evidence_level") in ("Partial","Weak","Not Found") and v.get("role_required")])[:5]
+            pscore=st.session_state.portfolio.get("portfolio_score") if st.session_state.portfolio else None
+            cscore=st.session_state.reality_check.get("score") if st.session_state.reality_check else None
+            jscore=st.session_state.job_match.get("score") if st.session_state.job_match else None
+            role=st.session_state.get("market_role") or "target role"
+            recommendation="Consider"
+            if jscore is not None and jscore>=80 and (cscore or 0)>=70: recommendation="Hire"
+            elif jscore is not None and jscore<40: recommendation="Pass"
+            st.session_state.recruiter_summary=(
+                f"CANDIDATE PROFILE:\nEvidence-first snapshot for {role}. "
+                f"The candidate has an ATS score of {st.session_state.ats_score if st.session_state.ats_score is not None else 'N/A'}, "
+                f"portfolio score of {pscore if pscore is not None else 'N/A'}, and credibility score of {cscore if cscore is not None else 'N/A'}%.\n\n"
+                f"TOP STRENGTHS:\n" + "\n".join(f"- {s.title()} ({sm[s].get('evidence_level')})" for s in strong[:3]) + "\n\n"
+                f"AREAS TO DEVELOP:\n" + "\n".join(f"- {s.title()} — evidence is not yet strong enough for a confirmed claim." for s in gaps[:2]) + "\n\n"
+                f"HIRING RECOMMENDATION: {recommendation} — based on the computed evidence scores shown above; this is not a prediction of hiring outcome."
+            )
             log_activity("Recruiter Summary generated","👔"); st.success("✅ Done!")
     if st.session_state.recruiter_summary:
         ds=compute_devpath_score(st.session_state)
@@ -3281,7 +3479,7 @@ HIRING RECOMMENDATION: (Strong Hire/Hire/Consider/Pass) + 1 sentence reason""")
         all_skills=list(set((st.session_state.github_skills or [])+(st.session_state.resume_skills or [])))[:14]
         if all_skills:
             st.markdown('<div style="font-size:11px;font-weight:700;color:#9090A8;letter-spacing:0.5px;margin-bottom:8px;">TOP SKILLS</div>',unsafe_allow_html=True)
-            st.markdown("".join(f'<span class="tag-pink">{s}</span>' for s in all_skills),unsafe_allow_html=True)
+            st.markdown('<div style="display:flex;flex-wrap:wrap;gap:6px;">'+"".join(f'<span class="tag-pink" style="margin:0;">{s.title()}</span>' for s in all_skills)+'</div>',unsafe_allow_html=True)
         st.markdown('</div>',unsafe_allow_html=True)
         st.markdown("<br>",unsafe_allow_html=True)
         pdf_data=generate_career_pdf(st.session_state)
@@ -3313,34 +3511,13 @@ elif page=="🎤  Interview Prep":
 
         with st.spinner("🔍 Retrieving interview questions from database..."):
             rag_questions = []
-            if RAG_AVAILABLE:
-                try:
-                    _get_rag_instance(); devpath_rag = _get_rag_instance()
-                    rag_questions = _get_rag_instance().retrieve_interview_questions(tr, n=5)
-                except Exception:
-                    rag_questions = []
-
+            rag_questions=retrieve_interview_questions_grounded(tr,diff,n=5)
             if rag_questions:
-                formatted = "\n".join([
-                    f"Q{i+1}: {q['question']}\nHINT: {q['hint']}"
-                    for i,q in enumerate(rag_questions[:5])
-                ])
-                resp = ask_llm(f"""You are a senior technical interviewer.
-The following questions were retrieved from our interview database for {tr} at {diff} level.
-Candidate skills: {known[:8] if known else 'unknown'}
-
-Retrieved questions:
-{formatted}
-
-Review and improve these questions for the candidate's level. Keep the same Q/HINT format exactly.
-Return exactly 5 questions in this format:
-Q1: [question]
-HINT: [what good answer covers]
-Q2: ...""")
-                st.session_state.interview_source = f"RAG Database + AI ({len(rag_questions)} questions retrieved)"
+                resp="\n".join([f"Q{i+1}: {q['question']}\nHINT: {q['hint']}" for i,q in enumerate(rag_questions)])
+                st.session_state.interview_source=f"RAG Database — exact stored questions ({len(rag_questions)})"
             else:
-                resp=ask_llm(f"Senior interviewer at top tech company.\n5 interview questions for '{tr}' at '{diff}' level.\nCandidate knows:{known[:10] if known else 'unknown'}\nFormat EXACTLY:\nQ1: [question]\nHINT: [one line what good answer covers]\nQ2: ... up to Q5. Make technical and specific.")
-                st.session_state.interview_source = "AI Generated"
+                resp=ask_llm(f"Senior interviewer. Generate 5 technical questions for '{tr}' at '{diff}' level. Do not claim these came from the RAG database. Candidate skills: {known[:10] if known else 'unknown'}. Format Q1/HINT through Q5.")
+                st.session_state.interview_source="AI Generated fallback (RAG unavailable/no matching records)"
 
             st.session_state.interview_questions=resp; st.session_state.interview_role=tr
             st.session_state.interview_feedback={}
@@ -3400,9 +3577,12 @@ elif page=="🔍  Opportunities":
         pl = pl[0].lower() if pl else "python"
         cs("🎯 Best-Fit Role Recommendations")
         if st.button("✨ Generate Recommendations"):
-            with st.spinner("Analyzing..."):
-                st.session_state.internship_recs=ask_llm(f"Skills:{skills[:15]}\nSuggest 4 specific internship/job roles.\nFor each: ROLE | MATCH % | REASON (1 sentence) | APPLY AT (platform)")
-        if st.session_state.get("internship_recs"): st.markdown(st.session_state.internship_recs)
+            with st.spinner("Computing evidence-based role fit..."):
+                st.session_state.internship_recs=build_role_recommendations(skills,top_n=4)
+        if st.session_state.get("internship_recs"):
+            st.markdown("<div style='overflow-x:auto;'><table><thead><tr><th>ROLE</th><th>FIT %</th><th>REASON</th><th>SEARCH ON</th></tr></thead><tbody>"+"".join(
+                f"<tr><td><strong>{r['role']}</strong></td><td>{r['match']}%</td><td>{r['reason']}</td><td>{r['search']}</td></tr>" for r in st.session_state.internship_recs
+            )+"</tbody></table></div><div style='font-size:11px;color:#9090A8;margin-top:8px;'>Fit % is computed from the prototype role-skill benchmark and your evidence levels; it is not a prediction of hiring probability.</div>",unsafe_allow_html=True)
         ce()
         st.markdown("<br>",unsafe_allow_html=True)
         c1,c2=st.columns(2)
@@ -3450,7 +3630,7 @@ elif page=="💬  Career Chat":
     if user_context:
         st.markdown(f'''
         <div style="background:#F8F7FF;border:1px solid #E8E6FF;border-radius:12px;padding:12px 16px;margin-bottom:16px;">
-            <div style="font-size:11px;font-weight:700;color:#7C3AED;letter-spacing:1px;margin-bottom:6px;">YOUR PROFILE CONTEXT (used in every answer)</div>
+            <div style="font-size:11px;font-weight:700;color:#7C3AED;letter-spacing:1px;margin-bottom:6px;">YOUR PROFILE CONTEXT (candidate source of truth)</div>
             <div style="font-size:12px;color:#4A4A5A;line-height:1.7;">{user_context.replace(chr(10), "<br>")}</div>
         </div>''',unsafe_allow_html=True)
 
@@ -3539,38 +3719,39 @@ elif page=="💬  Career Chat":
             st.markdown('<div style="font-size:11px;color:#16A34A;font-weight:600;margin-top:10px;">🤖 Building personalized recommendation from retrieved evidence...</div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
-        with st.spinner("🤖 Generating personalized answer..."):
-            personalized_prompt = f"""You are DevPath AI — a personalized career intelligence platform.
+        with st.spinner("🤖 Generating grounded personalized answer..."):
+            personalized_prompt=f'''You are DevPath Career Chat. Answer using two evidence layers.
 
-USER PROFILE:
-{user_context if user_context else "No profile data yet — give general advice."}
+TRUSTED CANDIDATE PROFILE:
+{user_context if user_context else "No candidate profile data is available."}
 
-RETRIEVED KNOWLEDGE FROM DATABASE:
-{rag_context if rag_context else "No additional context retrieved."}
+RETRIEVED KNOWLEDGE:
+{rag_context if rag_context else "No external knowledge was retrieved."}
 
-USER QUESTION: {q}
+USER QUESTION:
+{q}
 
-Answer with SPECIFIC personalization based on their actual scores and skills.
-Format your answer in clear sections with specific actionable steps.
-Reference their actual scores (ATS, Portfolio, Credibility) when relevant.
-Keep it concise but highly specific — not generic."""
+RULES:
+- Candidate-specific scores, skills, gaps and project evidence may only come from the profile context.
+- General career/market/learning claims must come from retrieved knowledge or be explicitly labeled as general advice.
+- Never invent salary numbers, percentages, performance improvements, ROI, hiring probabilities, score increases, or company-specific facts.
+- Never say an ATS score guarantees an interview.
+- If evidence is insufficient, say so rather than filling the gap with invented facts.
+- For salary questions, do not invent a market range. Give negotiation strategy unless the retrieved knowledge contains a defensible range.
+- Return clean Markdown with concise headings and bullets.'''
+            answer=ask_openai_direct(personalized_prompt,system="You are DevPath AI. Be conservative, evidence-first, and transparent about uncertainty. Never fabricate facts or metrics.")
 
-            answer = ask_openai_direct(personalized_prompt,
-                system="You are DevPath AI, a career intelligence platform powered by OpenAI GPT-4o. Give specific, evidence-based career advice.")
-
-        # Evaluate RAG groundedness before showing answer
-        rag_eval = evaluate_rag_response(q, rag_context or "", answer)
+        rag_eval=evaluate_rag_response(q,user_context,rag_context or "",answer)
         if rag_context:
             render_rag_eval_badge(rag_eval)
+        else:
+            st.markdown('<div style="font-size:11px;color:#DC2626;font-weight:700;margin:8px 0;">🛡️ No RAG evidence retrieved — answer is not RAG-certified.</div>',unsafe_allow_html=True)
 
-        st.markdown(f'''
-        <div style="background:#FFF5F7;border:1px solid #FFD6E0;border-left:4px solid #E91E63;
-             border-radius:12px;padding:18px 22px;margin-top:4px;">
-            <div style="font-size:11px;font-weight:700;color:#E91E63;letter-spacing:1px;margin-bottom:10px;">
-                PERSONALIZED ANSWER {'(RAG-Enhanced · Self-Evaluated)' if rag_context else ''}
-            </div>
-            <div style="font-size:14px;color:#1E1E2E;line-height:1.7;">{answer}</div>
-        </div>''', unsafe_allow_html=True)
+        st.markdown('''<div style="background:#FFF5F7;border:1px solid #FFD6E0;border-left:4px solid #E91E63;border-radius:12px;padding:14px 18px;margin-top:4px;">
+          <div style="font-size:11px;font-weight:700;color:#E91E63;letter-spacing:1px;margin-bottom:10px;">PERSONALIZED ANSWER · EVIDENCE-FIRST</div>
+        </div>''',unsafe_allow_html=True)
+        # Keep model Markdown outside HTML so tables, headings and links render correctly.
+        st.markdown(answer)
     ce()
     st.markdown('</div>',unsafe_allow_html=True)
 
@@ -3821,4 +4002,5 @@ if page=="🤖  Agentic Mode":
             ce()
 
     st.markdown('</div>',unsafe_allow_html=True)
+
 
