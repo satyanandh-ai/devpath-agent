@@ -603,24 +603,24 @@ PRIORITY_COLOR = {
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  RAG ENGINE — imported from rag_engine.py (single source of truth)
+#  RAG ENGINE — genuinely lazy import
 # ══════════════════════════════════════════════════════════════════════
-try:
-    from rag_engine import rag as _rag_instance
-    RAG_AVAILABLE = True
-except Exception as _rag_err:
-    RAG_AVAILABLE = False
-    _rag_instance = None
+RAG_AVAILABLE = True
+_rag_instance = None
+devpath_rag = None
 
 @st.cache_resource(show_spinner=False)
 def get_rag():
-    """Initialize RAG once per session — cached, never re-seeded."""
-    if not RAG_AVAILABLE or _rag_instance is None:
-        return None
-    _rag_instance.initialize()
+    """Load and initialize the RAG engine only when first requested."""
+    global _rag_instance
+    if _rag_instance is None:
+        try:
+            from rag_engine import rag as imported_rag
+            _rag_instance = imported_rag
+            _rag_instance.initialize()
+        except Exception:
+            return None
     return _rag_instance
-
-devpath_rag = None  # initialized lazily
 
 st.set_page_config(
     page_title="DevPath — AI Career Copilot",
@@ -677,6 +677,10 @@ section[data-testid="stSidebar"] .stRadio label:hover {
 .tag-neutral { background:rgba(139,92,246,0.08);color:#7C3AED;border:1px solid rgba(139,92,246,0.15);border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;display:inline-block;margin:3px; }
 .tag-pink { background:#FFF0F7;color:#E91E63;border:1px solid #FFD6EA;border-radius:20px;padding:5px 14px;font-size:12px;font-weight:600;display:inline-block;margin:3px; }
 .tag-emerge { background:#F5F0FF;color:#7C3AED;border:1px solid #E0D9FF;border-radius:20px;padding:5px 14px;font-size:12px;font-weight:600;display:inline-block;margin:3px; }
+.skill-chip-wrap { display:flex; flex-wrap:wrap; gap:8px; align-items:center; width:100%; }
+.skill-chip-wrap .skill-chip { margin:0 !important; white-space:nowrap; }
+section.main [data-testid="stMarkdownContainer"] { color:#1E1E2E !important; }
+section.main [data-testid="stMarkdownContainer"] p, section.main [data-testid="stMarkdownContainer"] li, section.main [data-testid="stMarkdownContainer"] h1, section.main [data-testid="stMarkdownContainer"] h2, section.main [data-testid="stMarkdownContainer"] h3, section.main [data-testid="stMarkdownContainer"] h4, section.main [data-testid="stMarkdownContainer"] h5, section.main [data-testid="stMarkdownContainer"] h6 { color:#1E1E2E; }
 .skill-row { margin-bottom: 10px; }
 .skill-row-top { display:flex;justify-content:space-between;align-items:center;margin-bottom:5px; }
 .skill-name { font-size:13px;font-weight:500;color:#1E1E2E; }
@@ -981,6 +985,46 @@ def compute_ats_score(resume_text: str) -> dict:
             "has_linkedin":has_linkedin,"has_github_link":has_github,"word_count":wc,"verb_count":vc,"quant_count":qc}
 
 # ══════════════════════════════════════════════════════════════════════
+#  SHARED DISPLAY HELPERS — one source of truth for labels/chips
+# ══════════════════════════════════════════════════════════════════════
+ATS_GRADE_BANDS = ((93, "Excellent"), (85, "Strong"), (80, "Good"),
+                   (70, "Average"), (50, "Weak"), (0, "Needs Work"))
+
+def ats_grade(score: int) -> str:
+    score = max(0, min(100, int(score or 0)))
+    for minimum, label in ATS_GRADE_BANDS:
+        if score >= minimum:
+            return label
+    return "Needs Work"
+
+
+def display_skill_name(skill: str) -> str:
+    canonical = normalize_skill(skill) if skill else ""
+    labels = {
+        "llm":"LLM / GenAI", "openai api":"OpenAI API", "github-api":"GitHub API",
+        "rest api":"REST API", "ci/cd":"CI/CD", "scikit-learn":"Scikit-learn",
+        "machine learning":"Machine Learning", "deep learning":"Deep Learning",
+        "vector database":"Vector Database", "prompt engineering":"Prompt Engineering",
+        "fastapi":"FastAPI", "langchain":"LangChain", "langgraph":"LangGraph",
+        "pytorch":"PyTorch", "tensorflow":"TensorFlow", "streamlit":"Streamlit"
+    }
+    return labels.get(canonical, canonical.title() if canonical else str(skill).strip())
+
+
+def render_skill_chips(skills, prefix="", css_class="tag-neutral") -> None:
+    items=[]; seen=set()
+    for skill in skills or []:
+        canonical=normalize_skill(str(skill))
+        if not canonical or canonical in seen: continue
+        seen.add(canonical)
+        label=f"{prefix}{display_skill_name(canonical)}"
+        items.append(f'<span class="{css_class} skill-chip">{label}</span>')
+    if items:
+        st.markdown('<div class="skill-chip-wrap">'+''.join(items)+'</div>', unsafe_allow_html=True)
+    else:
+        st.caption("None detected")
+
+# ══════════════════════════════════════════════════════════════════════
 #  PHASE 1 — Resume Intelligence: robust skill extraction
 # ══════════════════════════════════════════════════════════════════════
 
@@ -1121,6 +1165,7 @@ Do NOT output reasoning, thinking, or analysis process.
 Do NOT invent anything not present in the resume.
 Do NOT mention the candidate's name.
 Be specific, evidence-based, and recruiter-readable.
+Never describe work as "production-grade", "production-ready", "enterprise-grade", or "verified" unless the resume explicitly provides evidence for that exact claim. Do not infer deployment quality, scale, latency, reliability, or business impact from a technology name alone.
 
 Use EXACTLY these section headers (copy them exactly):
 
@@ -1145,7 +1190,7 @@ Example: AI Engineer | Strong | LangChain + RAG projects + Python
 ##STRENGTHS##
 List 3-5 specific strengths with evidence from the resume.
 Each strength must cite a specific skill, project, or achievement.
-NOT generic. Example: "RAG implementation in devpath-agent project shows production LLM engineering."
+NOT generic. Example: "RAG implementation in the devpath-agent project demonstrates retrieval-based LLM application development."
 
 ##GAPS##
 List 3-4 specific gaps — not generic advice.
@@ -1155,8 +1200,8 @@ Example: "No evidence of model evaluation or ML experimentation — critical for
 ##PRIORITY_ACTIONS##
 List 4-5 ranked actions as P0/P1/P2.
 P0 = do this week. P1 = this month. P2 = next 60 days.
-Each action must be specific and achievable.
-Example: "P0 — Add quantified outcomes to 3 project bullets (e.g., reduced latency by 40%)"
+Each action must be specific and achievable. Never invent, estimate, or suggest a fake performance metric. If a metric is unavailable, recommend measuring it first.
+Example: "P0 — Add 2–3 quantified outcomes to project bullets using only metrics that can be verified from the user's actual work."
 
 ##FINAL_VERDICT##
 One short paragraph. Recruiter-style summary.
@@ -2284,7 +2329,7 @@ if page=="🏠  Overview":
             st.markdown(f'<div class="dp-card-sm" style="text-align:center;"><div style="font-size:11px;color:#9090A8;font-weight:600;margin-bottom:8px;">DevPath Score</div><div style="width:60px;height:60px;background:linear-gradient(135deg,#E91E63,#F06292);border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 8px;box-shadow:0 6px 18px rgba(233,30,99,0.3);"><span style="font-size:22px;font-weight:900;color:white;">{dv or "—"}</span></div><div style="font-size:11px;font-weight:600;color:{lc};">{lvl}</div><div style="height:3px;background:linear-gradient(90deg,#E91E63,#F06292);border-radius:99px;margin-top:8px;"></div></div>',unsafe_allow_html=True)
         for col,label,val,gfn in [
             (sc2,"Portfolio Score",p["portfolio_score"] if p else None,lambda v:"Good" if v>=60 else "Fair"),
-            (sc3,"ATS Score",st.session_state.ats_score,lambda v:"Strong" if v>=75 else "Fair"),
+            (sc3,"ATS Score",st.session_state.ats_score,ats_grade),
             (sc4,"Credibility",rc["score"] if rc else None,lambda v:"Needs Work" if v<50 else "Good"),
             (sc5,"Job Match",jm["score"] if jm else None,lambda v:"Good Match" if v>=60 else "Fair"),
         ]:
@@ -2541,7 +2586,7 @@ elif page=="📄  Resume Intelligence":
         with c1:
             sc=st.session_state.ats_score
             scc="#22C55E" if sc>=70 else "#F59E0B" if sc>=50 else "#E91E63"
-            gr="Strong" if sc>=80 else "Good" if sc>=65 else "Fair" if sc>=50 else "Needs Work"
+            gr=ats_grade(sc)
             cs("🎯 ATS Score","5-category computed engine")
             st.markdown(f'<div style="font-size:64px;font-weight:900;color:{scc};line-height:1;text-align:center;">{sc}</div><div style="text-align:center;font-size:13px;color:#9090A8;margin-bottom:12px;">/100 · {gr}</div>',unsafe_allow_html=True)
             st.progress(sc/100)
@@ -2562,13 +2607,13 @@ elif page=="📄  Resume Intelligence":
             ce()
             if st.session_state.ats_data["found_keywords"]:
                 cs("🔑 Tech Keywords Found")
-                badges="".join(f'<span class="tag-neutral" style="margin:3px;display:inline-block;">{k.title()}</span>' for k in st.session_state.ats_data["found_keywords"][:20])
-                st.markdown(f'<div style="line-height:2.4;">{badges}</div><div style="font-size:11px;color:#9090A8;margin-top:8px;">{len(st.session_state.ats_data["found_keywords"])} keywords</div>',unsafe_allow_html=True)
+                render_skill_chips(st.session_state.ats_data["found_keywords"][:20])
+                st.markdown(f'<div style="font-size:11px;color:#9090A8;margin-top:8px;">{len(st.session_state.ats_data["found_keywords"])} keywords</div>',unsafe_allow_html=True)
                 ce()
     if st.session_state.resume_skills:
         st.markdown("<br>",unsafe_allow_html=True)
         cs("🛠️ Extracted Skills")
-        st.markdown("".join(f'<span class="tag-neutral">{s}</span>' for s in st.session_state.resume_skills),unsafe_allow_html=True)
+        render_skill_chips(st.session_state.resume_skills)
         ce()
     if st.session_state.resume_analysis:
         st.markdown("<br>",unsafe_allow_html=True)
@@ -2693,7 +2738,7 @@ elif page=="🐙  GitHub Analysis":
         if st.session_state.github_skills:
             st.markdown("<br>",unsafe_allow_html=True)
             cs("🛠️ Skills Evidenced from GitHub")
-            st.markdown("".join(f'<span class="tag-neutral">{s}</span>' for s in st.session_state.github_skills),unsafe_allow_html=True)
+            render_skill_chips(st.session_state.github_skills)
             ce()
         st.markdown("<br>",unsafe_allow_html=True)
         cs("📁 Top Repositories")
@@ -2816,7 +2861,7 @@ elif page=="🌉  Reality Check":
             </div>""", unsafe_allow_html=True)
         if rc.get("extra"):
             st.markdown('<br><div style="font-size:14px;font-weight:700;color:#1E1E2E;margin-bottom:8px;">💎 Hidden Strengths (on GitHub, not on Resume)</div>',unsafe_allow_html=True)
-            st.markdown("".join(f'<span class="tag-neutral">+ {s}</span>' for s in rc["extra"]),unsafe_allow_html=True)
+            render_skill_chips(rc.get("extra", []), prefix="+ ")
         st.markdown(f'<div style="background:#FFF5F7;border:1px solid #FFD6E0;border-left:4px solid #E91E63;border-radius:12px;padding:14px 18px;margin-top:14px;"><div style="font-size:11px;font-weight:700;color:#E91E63;margin-bottom:6px;letter-spacing:1px;">💡 RECOMMENDATION</div><div style="font-size:13px;color:#4A4A5A;line-height:1.6;">{rc.get("recommendation","")}</div></div>',unsafe_allow_html=True)
         ce()
     st.markdown('</div>',unsafe_allow_html=True)
@@ -2936,7 +2981,7 @@ elif page=="💼  Job Match":
             ce()
         with c4:
             cs("⚠️ Partial Evidence")
-            st.markdown("".join(f'<span class="tag-neutral">~ {s}</span>' for s in jm.get("partial",[])) or "None",unsafe_allow_html=True)
+            render_skill_chips(jm.get("partial", []), prefix="~ ")
             ce()
         with c5:
             cs("❌ Not Found")
@@ -3776,3 +3821,4 @@ if page=="🤖  Agentic Mode":
             ce()
 
     st.markdown('</div>',unsafe_allow_html=True)
+
