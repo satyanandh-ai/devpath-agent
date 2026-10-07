@@ -1,37 +1,63 @@
-# test_rag1.py — RAG-1 standalone retrieval test
-# Run with: python test_rag1.py
-# Verifies: real semantic retrieval + persistence, before touching app.py
+# DevPath RAG-2 validation test
+# Run from the same environment where requirements.txt is installed.
+# Verifies: initialization, collection counts, reranking, thresholds, and evidence pack.
 
 from rag_engine import rag
 
-def show_results(title, query, results):
-    print(f"\n{'='*70}\nQUERY: {query}\n{title}\n{'='*70}")
-    if not results:
+
+def print_result(title, result):
+    print(f"\n{'=' * 72}\n{title}\n{'=' * 72}")
+    if not result:
         print("  (no results)")
         return
-    for i, r in enumerate(results, 1):
-        print(f"\n  Evidence {i}")
-        print(f"  Source: {r['metadata'].get('source')}")
-        print(f"  Similarity: {r['similarity']}  (distance: {r['distance']})")
-        print(f"  Content: {r['document'][:150]}")
+    for i, item in enumerate(result, 1):
+        print(f"\n{i}. {item}")
+
 
 if __name__ == "__main__":
-    print("Initializing RAG (first run builds persistent Chroma DB at ./devpath_chroma_db)...")
+    print("Initializing DevPath RAG-2...")
     rag.initialize()
+    print("Stats:", rag.get_stats())
 
-    print("\nCollection stats:", rag.get_stats())
+    raw = rag.retrieve(
+        "jobs",
+        "AI Engineer Python LangChain RAG FastAPI",
+        n=5,
+        candidate_n=15,
+        min_relevance=0.35,
+    )
+    print_result("Generic jobs retrieval + reranking", raw)
 
-    show_results("CAREER collection", "What skills are required for an AI Engineer?",
-                 rag.retrieve("career", "What skills are required for an AI Engineer?", n=3))
+    jobs = rag.retrieve_jobs(
+        "AI Engineer",
+        ["Python", "LangChain", "RAG", "FastAPI", "Docker"],
+        n=5,
+    )
+    print_result("Domain job retrieval", jobs)
 
-    show_results("JOBS collection", "AI Engineer with LangChain and RAG experience",
-                 rag.retrieve("jobs", "AI Engineer with LangChain and RAG experience", n=3))
+    interviews = rag.retrieve_interview_questions("AI Engineer", n=5)
+    print_result("Interview retrieval", interviews)
 
-    show_results("INTERVIEWS collection", "how to evaluate a RAG system",
-                 rag.retrieve("interviews", "how to evaluate a RAG system", n=3))
+    resources = rag.retrieve_learning_resources(
+        ["RAG", "FastAPI", "Docker"], n=4
+    )
+    print_result("Learning retrieval", resources)
 
-    show_results("LEARNING collection", "learn AWS deployment",
-                 rag.retrieve("learning", "learn AWS deployment", n=3))
+    career = rag.retrieve_career_knowledge(
+        "How should an AI Engineer prepare for interviews?", n=3
+    )
+    print_result("Career retrieval", career)
 
-    print("\n\n--- Run this script again (without deleting ./devpath_chroma_db) ---")
-    print("--- to confirm the collections persist across restarts. ---")
+    pack = rag.build_evidence_pack(
+        role="AI Engineer",
+        user_skills=["Python", "LangChain", "RAG", "FastAPI", "Docker"],
+        query="AI Engineer internship preparation",
+    )
+    print_result("Grounded evidence pack", pack)
+
+    # Basic invariants.
+    assert pack["rag_version"] == "2.0"
+    assert pack["retrieval_policy"]["scores_are_percentages"] is False
+    assert isinstance(pack["jobs"], list)
+    assert all(0.0 <= x["relevance_score"] <= 1.0 for x in pack["jobs"])
+    print("\nRAG-2 validation checks passed.")
