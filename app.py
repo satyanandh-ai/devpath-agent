@@ -1781,6 +1781,11 @@ recommendation must be "done" or "replan"."""
 # ── Supervisor Agent ──────────────────────────────────────────────────
 def build_devpath_agent(llm):
     """Build the LangGraph ReAct agent with all DevPath tools."""
+    # Ensure LLM is not None
+    if llm is None:
+        llm = _get_llm_instance()
+    if llm is None:
+        raise ValueError("LLM not available — check GROQ_API_KEY in Streamlit Secrets")
     tools = [
         resume_analysis_tool,
         github_analysis_tool,
@@ -1809,7 +1814,9 @@ Current user goal: {goal}"""
     return create_react_agent(llm, tools)
 
 
-def run_devpath_agent(goal: str, context: dict, llm) -> dict:
+def run_devpath_agent(goal: str, context: dict, llm=None) -> dict:
+    if llm is None:
+        llm = _get_llm_instance()
     """
     Run the DevPath Agentic Loop.
     context = {resume_text, github_username, target_role, current_scores}
