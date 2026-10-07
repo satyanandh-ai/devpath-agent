@@ -1,4 +1,4 @@
-# DevPath RAG Engine — RAG-1 (with interviews dedup fix)
+# DevPath RAG Engine — RAG-2 (retrieval + reranking + evidence pack)
 # Real semantic embeddings (fastembed / BAAI/bge-small-en-v1.5)
 # Persistent ChromaDB. Single source of truth — app.py not wired in yet.
 
@@ -8,6 +8,8 @@ from fastembed import TextEmbedding
 import json
 import os
 import re
+import math
+from collections import Counter
 
 # ══════════════════════════════════════════════════════════════════════
 #  STEP 4 — REAL EMBEDDINGS (replaces DevPathEmbedding hash function)
@@ -215,14 +217,29 @@ def build_career_metadata(c: dict) -> dict:
 #  RAG ENGINE
 # ══════════════════════════════════════════════════════════════════════
 class DevPathRAG:
-    def __init__(self, persist_path: str = "/tmp/devpath_chroma_db"):
+    """DevPath RAG-2 engine.
+
+    Design goals:
+    - real semantic retrieval with FastEmbed + ChromaDB
+    - multi-query candidate expansion
+    - deterministic lexical/skill/role reranking without another LLM call
+    - no fake "similarity percentages"
+    - metadata-aware filtering and source attribution
+    - relevance thresholds so weak evidence can be rejected
+    - backward-compatible retrieve_* methods for app.py
+    """
+
+    RAG_VERSION = "2.0"
+    DEFAULT_PERSIST_PATH = "/tmp/devpath_chroma_db"
+    DEFAULT_MIN_RELEVANCE = 0.42
+
+    def __init__(self, persist_path: str = DEFAULT_PERSIST_PATH):
         self._persist_path = persist_path
         self._client = None
         self._ef = None
         self._initialized = False
         self._collections = {}
 
-    # ── STEP 5 — persistent client ──────────────────────────────────
     def _get_client(self):
         if self._client is None:
             os.makedirs(self._persist_path, exist_ok=True)
@@ -230,105 +247,428 @@ class DevPathRAG:
             self._ef = FastEmbedFunction()
         return self._client, self._ef
 
+    # ------------------------------------------------------------------
+    # Normalization / deterministic ranking helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _norm(value) -> str:
+        value = clean_text(value).lower()
+        value = re.sub(r"[^a-z0-9+#./-]+", " ", value)
+        return re.sub(r"\s+", " ", value).strip()
+
+    @classmethod
+    def _tokens(cls, value) -> set:
+        text = cls._norm(value)
+        if not text:
+            return set()
+        return set(re.findall(r"[a-z0-9]+(?:[+#./-][a-z0-9]+)*", text))
+
+    @classmethod
+    def _token_overlap(cls, query: str, document: str) -> float:
+        q = cls._tokens(query)
+        d = cls._tokens(document)
+        if not q or not d:
+            return 0.0
+        return len(q & d) / max(1, len(q))
+
+    @staticmethod
+    def _skill_aliases(skill: str) -> set:
+        s = clean_text(skill).lower()
+        aliases = {
+            "llm": {"llm", "llms", "large language model", "genai", "generative ai"},
+            "vector database": {"vector database", "vector databases", "chromadb", "pinecone", "qdrant", "weaviate", "faiss"},
+            "scikit-learn": {"scikit-learn", "sklearn", "scikit learn"},
+            "github": {"github", "github.com"},
+            "github-api": {"github api", "pygithub", "octokit"},
+            "rest api": {"rest api", "restful api", "api development", "http api"},
+            "ci/cd": {"ci/cd", "cicd", "github actions", "jenkins", "gitlab ci", "continuous integration"},
+            "machine learning": {"machine learning", "ml"},
+            "deep learning": {"deep learning", "dl", "neural network", "neural networks"},
+            "openai api": {"openai api", "chatgpt api"},
+            "langgraph": {"langgraph"},
+            "langchain": {"langchain"},
+            "fastapi": {"fastapi", "fast api"},
+            "docker": {"docker", "dockerfile", "docker compose", "docker-compose", "containerization"},
+        }
+        return aliases.get(s, {s})
+
+    @classmethod
+    def _canonical_skill_set(cls, skills) -> set:
+        out = set()
+        for skill in skills or []:
+            s = cls._norm(skill)
+            if not s:
+                continue
+            out.add(s)
+        return out
+
+    @classmethod
+    def _skill_match(cls, requested_skills, candidate_skills) -> tuple:
+        requested = cls._canonical_skill_set(requested_skills)
+        candidate = cls._canonical_skill_set(candidate_skills)
+        if not requested or not candidate:
+            return 0.0, []
+        matched = []
+        for skill in requested:
+            aliases = cls._skill_aliases(skill)
+            if any(alias in candidate or any(alias in c for c in candidate) for alias in aliases):
+                matched.append(skill)
+        return len(matched) / len(requested), sorted(matched)
+
+    @classmethod
+    def _role_match(cls, requested_role: str, candidate_role: str) -> float:
+        q = cls._tokens(requested_role)
+        c = cls._tokens(candidate_role)
+        if not q or not c:
+            return 0.0
+        # Exact role phrase is strongest; token overlap is the fallback.
+        if cls._norm(requested_role) == cls._norm(candidate_role):
+            return 1.0
+        overlap = len(q & c) / len(q)
+        # Related role families are useful but should not look like exact matches.
+        families = [
+            ({"ai", "engineer"}, {"genai", "engineer"}),
+            ({"ai", "engineer"}, {"ml", "engineer"}),
+            ({"ai", "engineer"}, {"backend", "engineer"}),
+            ({"genai", "engineer"}, {"ai", "engineer"}),
+            ({"ml", "engineer"}, {"ai", "engineer"}),
+        ]
+        if any(q <= a and c <= b or q <= b and c <= a for a, b in families):
+            return max(overlap, 0.65)
+        return overlap
+
+    @staticmethod
+    def _distance_to_semantic_score(distance) -> float:
+        """Convert Chroma distance to a bounded ranking score, not a percentage.
+
+        We deliberately do not expose this as a probability or percent. The
+        exact meaning of Chroma's distance depends on the configured metric.
+        """
+        try:
+            d = max(0.0, float(distance))
+        except (TypeError, ValueError):
+            return 0.0
+        return math.exp(-d)
+
+    @classmethod
+    def _combine_score(cls, semantic: float, lexical: float,
+                       skill: float = 0.0, role: float = 0.0) -> float:
+        # Weighted deterministic reranker. Semantic remains the largest signal.
+        score = (
+            0.55 * semantic +
+            0.15 * lexical +
+            0.20 * skill +
+            0.10 * role
+        )
+        return round(max(0.0, min(1.0, score)), 4)
+
+    @staticmethod
+    def _dedupe(results: list) -> list:
+        seen = set()
+        out = []
+        for item in results:
+            meta = item.get("metadata", {})
+            key = (
+                item.get("id") or meta.get("id") or
+                meta.get("company") or meta.get("resource") or
+                item.get("document", "")
+            )
+            key = str(key).strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+        return out
+
+    # ------------------------------------------------------------------
+    # Initialization / persistence
+    # ------------------------------------------------------------------
     def initialize(self, force_reseed: bool = False):
         if self._initialized and not force_reseed:
             return
+
         client, ef = self._get_client()
 
-        # STEP 1 — clean + validate each collection's source data
-        # NOTE: content_field must match each dataset's actual content key
-        jobs = clean_and_validate(JOB_INTELLIGENCE, ["id", "text", "role", "company"], content_field="text")
-        interviews = clean_and_validate(INTERVIEW_INTELLIGENCE, ["id", "question", "role"], content_field="question")
-        learning = clean_and_validate(LEARNING_INTELLIGENCE, ["id", "text", "skill", "resource"], content_field="text")
-        career = clean_and_validate(CAREER_INTELLIGENCE, ["id", "text", "topic"], content_field="text")
+        jobs = clean_and_validate(
+            JOB_INTELLIGENCE, ["id", "text", "role", "company"], content_field="text"
+        )
+        interviews = clean_and_validate(
+            INTERVIEW_INTELLIGENCE, ["id", "question", "role"], content_field="question"
+        )
+        learning = clean_and_validate(
+            LEARNING_INTELLIGENCE, ["id", "text", "skill", "resource"], content_field="text"
+        )
+        career = clean_and_validate(
+            CAREER_INTELLIGENCE, ["id", "text", "topic"], content_field="text"
+        )
 
-        # STEP 3 — retrieval units: each entry is already atomic, kept as-is
         collections_data = [
-            ("jobs",       [(j["id"], j["text"], build_job_metadata(j)) for j in jobs]),
+            ("jobs", [(j["id"], j["text"], build_job_metadata(j)) for j in jobs]),
             ("interviews", [(q["id"], f"{q['question']} {q['hint']}", build_interview_metadata(q)) for q in interviews]),
-            ("learning",   [(r["id"], r["text"], build_learning_metadata(r)) for r in learning]),
-            ("career",     [(c["id"], c["text"], build_career_metadata(c)) for c in career]),
+            ("learning", [(r["id"], r["text"], build_learning_metadata(r)) for r in learning]),
+            ("career", [(c["id"], c["text"], build_career_metadata(c)) for c in career]),
         ]
 
         for name, data in collections_data:
-            if force_reseed:
+            reseed = force_reseed
+            col = None
+            try:
+                col = client.get_collection(name, embedding_function=ef)
+                metadata = col.metadata or {}
+                if metadata.get("devpath_rag_version") != self.RAG_VERSION:
+                    reseed = True
+            except Exception:
+                pass
+
+            if reseed:
                 try:
                     client.delete_collection(name)
                 except Exception:
                     pass
-            try:
-                col = client.get_collection(name, embedding_function=ef)
-            except Exception:
-                col = client.create_collection(name, embedding_function=ef)
+                col = None
+
+            if col is None:
+                col = client.create_collection(
+                    name,
+                    embedding_function=ef,
+                    metadata={
+                        "devpath_rag_version": self.RAG_VERSION,
+                        "embedding_model": "BAAI/bge-small-en-v1.5",
+                        "distance_note": "Chroma distance used for ranking; not a probability",
+                    },
+                )
                 if data:
                     col.add(
                         ids=[d[0] for d in data],
                         documents=[d[1] for d in data],
                         metadatas=[d[2] for d in data],
                     )
+
             self._collections[name] = col
 
         self._initialized = True
 
-    # ── STEP 6 — retrieval, with inspectable relevance info ─────────
-    def retrieve(self, collection_name: str, query: str, n: int = 5) -> list:
-        """Generic retrieval — returns documents + metadata + distance
-        so results can be inspected, not just consumed blindly."""
-        self.initialize()
-        col = self._collections[collection_name]
-        n = min(n, col.count()) or 1
-        results = col.query(query_texts=[query], n_results=n)
-        out = []
-        docs = results["documents"][0]
-        metas = results["metadatas"][0]
-        dists = results["distances"][0]
-        for doc, meta, dist in zip(docs, metas, dists):
-            out.append({
-                "document": doc,
-                "metadata": meta,
-                "distance": round(dist, 4),
-                # NOTE: 1 - distance is only a rough proxy, not a calibrated
-                # similarity percentage — depends on Chroma's distance metric
-                # for this collection. Flagged for correction in RAG-2.
-                "similarity": round(max(0.0, 1 - dist), 4),
-            })
-        return out
+    # ------------------------------------------------------------------
+    # Core retrieval
+    # ------------------------------------------------------------------
+    def retrieve(self, collection_name: str, query: str, n: int = 5,
+                 candidate_n: int | None = None, min_relevance: float = 0.0,
+                 where: dict | None = None) -> list:
+        """Retrieve and deterministically rerank evidence.
 
-    def retrieve_jobs(self, role: str, user_skills: list, n: int = 5) -> list:
-        query = f"{role} {' '.join(user_skills[:8])}"
-        raw = self.retrieve("jobs", query, n)
+        Returned fields intentionally distinguish `semantic_score` from the
+        old misleading similarity percentage. `similarity` is retained as a
+        backward-compatible alias to the semantic score, but is NOT a percent.
+        """
+        self.initialize()
+        if collection_name not in self._collections:
+            raise ValueError(f"Unknown RAG collection: {collection_name}")
+
+        query = clean_text(query)
+        if not query:
+            return []
+
+        col = self._collections[collection_name]
+        count = col.count()
+        if count <= 0:
+            return []
+
+        n = max(1, min(int(n), count))
+        candidate_n = max(n, min(int(candidate_n or max(12, n * 3)), count))
+
+        kwargs = {"query_texts": [query], "n_results": candidate_n}
+        if where:
+            kwargs["where"] = where
+
+        results = col.query(**kwargs)
+        docs = results.get("documents", [[]])[0]
+        metas = results.get("metadatas", [[]])[0]
+        dists = results.get("distances", [[]])[0]
+        ids = results.get("ids", [[]])[0]
+
+        out = []
+        for doc, meta, dist, rid in zip(docs, metas, dists, ids):
+            semantic = self._distance_to_semantic_score(dist)
+            lexical = self._token_overlap(query, doc)
+            combined = self._combine_score(semantic, lexical)
+            out.append({
+                "id": rid,
+                "document": doc,
+                "metadata": meta or {},
+                "distance": round(float(dist), 6),
+                "semantic_score": round(semantic, 4),
+                "lexical_score": round(lexical, 4),
+                "relevance_score": combined,
+                # Backward-compatible alias. Never describe this as a percent.
+                "similarity": round(semantic, 4),
+            })
+
+        out = sorted(out, key=lambda x: x["relevance_score"], reverse=True)
+        if min_relevance > 0:
+            out = [x for x in out if x["relevance_score"] >= min_relevance]
+        return out[:n]
+
+    def _multi_query_retrieve(self, collection_name: str, queries: list,
+                              n: int, candidate_n: int | None = None,
+                              min_relevance: float = 0.0) -> list:
+        candidates = []
+        for query in queries:
+            if clean_text(query):
+                candidates.extend(
+                    self.retrieve(
+                        collection_name, query, n=max(n, 5),
+                        candidate_n=candidate_n, min_relevance=0.0
+                    )
+                )
+        candidates = self._dedupe(candidates)
+        candidates.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
+        if min_relevance > 0:
+            candidates = [x for x in candidates if x["relevance_score"] >= min_relevance]
+        return candidates[:n]
+
+    # ------------------------------------------------------------------
+    # Public domain-specific retrieval
+    # ------------------------------------------------------------------
+    def retrieve_jobs(self, role: str, user_skills: list, n: int = 5,
+                      min_relevance: float = DEFAULT_MIN_RELEVANCE) -> list:
+        skills = [clean_text(s) for s in (user_skills or []) if clean_text(s)]
+        role = clean_text(role) or "AI Engineer"
+        skill_text = " ".join(skills[:12])
+        queries = [
+            f"{role}",
+            f"{role} required skills {skill_text}" if skill_text else role,
+            f"{role} Python AI software engineering {skill_text}" if skill_text else role,
+        ]
+
+        raw = self._multi_query_retrieve("jobs", queries, n=max(n, 5), candidate_n=15,
+                                         min_relevance=0.0)
         jobs = []
         for r in raw:
             m = r["metadata"]
+            job_skills = json.loads(m.get("skills", "[]"))
+            skill_score, matched = self._skill_match(skills, job_skills)
+            role_score = self._role_match(role, m.get("role", ""))
+            final = self._combine_score(
+                r["semantic_score"], r["lexical_score"], skill_score, role_score
+            )
+            if final < min_relevance:
+                continue
             jobs.append({
-                "company": m["company"], "role": m["role"],
-                "skills": json.loads(m.get("skills", "[]")),
-                "salary_india": m["salary_india"], "demand": m["demand"],
-                "relevance_score": round(r["similarity"] * 100),
+                "id": r.get("id"),
+                "company": m["company"],
+                "role": m["role"],
+                "skills": job_skills,
+                "salary_india": m["salary_india"],
+                "demand": m["demand"],
+                "matched_skills": matched,
+                "skill_match_score": round(skill_score, 4),
+                "role_match_score": round(role_score, 4),
+                "semantic_score": r["semantic_score"],
+                "relevance_score": final,
+                "source": m.get("source", "DevPath Job Intelligence"),
             })
-        return jobs
 
-    def retrieve_interview_questions(self, role: str, n: int = 5) -> list:
-        raw = self.retrieve("interviews", f"{role} interview technical questions", n)
-        return [{"question": r["metadata"]["question"], "difficulty": r["metadata"]["difficulty"],
-                  "topic": r["metadata"]["topic"], "hint": r["metadata"]["hint"],
-                  "role": r["metadata"]["role"]} for r in raw]
+        # One job can be returned by several query variants. Keep the best one.
+        best = {}
+        for job in jobs:
+            key = job["id"] or f"{job['company']}::{job['role']}"
+            if key not in best or job["relevance_score"] > best[key]["relevance_score"]:
+                best[key] = job
+        return sorted(best.values(), key=lambda x: x["relevance_score"], reverse=True)[:n]
 
-    def retrieve_learning_resources(self, skills: list, n: int = 4) -> list:
+    def retrieve_interview_questions(self, role: str, n: int = 5,
+                                     topics: list | None = None) -> list:
+        role = clean_text(role) or "AI Engineer"
+        topic_text = " ".join(topics or [])
+        queries = [
+            f"{role} interview technical questions",
+            f"{role} interview {topic_text}" if topic_text else f"{role} interview system design",
+        ]
+        raw = self._multi_query_retrieve("interviews", queries, n=n, candidate_n=12,
+                                         min_relevance=0.35)
+        return [{
+            "id": r.get("id"),
+            "question": r["metadata"]["question"],
+            "difficulty": r["metadata"]["difficulty"],
+            "topic": r["metadata"]["topic"],
+            "hint": r["metadata"]["hint"],
+            "role": r["metadata"]["role"],
+            "relevance_score": r["relevance_score"],
+            "source": r["metadata"].get("source"),
+        } for r in raw]
+
+    def retrieve_learning_resources(self, skills: list, n: int = 4,
+                                    min_relevance: float = 0.35) -> list:
+        skills = [clean_text(s) for s in (skills or []) if clean_text(s)]
         if not skills:
             return []
-        raw = self.retrieve("learning", " ".join(skills[:5]), n)
-        return [{"skill": r["metadata"]["skill"], "resource": r["metadata"]["resource"],
-                  "url": r["metadata"]["url"], "difficulty": r["metadata"]["difficulty"],
-                  "time": r["metadata"]["time"]} for r in raw]
+        queries = [f"learn {s}" for s in skills[:5]]
+        raw = self._multi_query_retrieve("learning", queries, n=max(n, 5), candidate_n=10,
+                                         min_relevance=min_relevance)
+        out = []
+        seen = set()
+        for r in raw:
+            m = r["metadata"]
+            key = m.get("resource", r.get("id"))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "id": r.get("id"),
+                "skill": m["skill"],
+                "resource": m["resource"],
+                "url": m["url"],
+                "difficulty": m["difficulty"],
+                "time": m["time"],
+                "relevance_score": r["relevance_score"],
+                "source": m.get("source"),
+            })
+        return out[:n]
 
-    def retrieve_career_knowledge(self, query: str, n: int = 3) -> list:
-        raw = self.retrieve("career", query, n)
-        return [{"topic": r["metadata"]["topic"], "content": r["document"]} for r in raw]
+    def retrieve_career_knowledge(self, query: str, n: int = 3,
+                                  min_relevance: float = 0.35) -> list:
+        raw = self.retrieve("career", query, n=n, candidate_n=max(9, n * 3),
+                            min_relevance=min_relevance)
+        return [{
+            "id": r.get("id"),
+            "topic": r["metadata"]["topic"],
+            "content": r["document"],
+            "relevance_score": r["relevance_score"],
+            "source": r["metadata"].get("source"),
+        } for r in raw]
+
+    def build_evidence_pack(self, *, role: str = "", user_skills: list | None = None,
+                            query: str = "", job_n: int = 5,
+                            resource_n: int = 4, career_n: int = 3) -> dict:
+        """Return a source-attributed pack suitable for grounded LLM generation.
+
+        This method does not generate claims. It only returns retrieved evidence.
+        """
+        role = clean_text(role)
+        skills = list(user_skills or [])
+        pack = {
+            "rag_version": self.RAG_VERSION,
+            "query": clean_text(query),
+            "role": role,
+            "retrieval_policy": {
+                "semantic_embeddings": "BAAI/bge-small-en-v1.5",
+                "reranking": "semantic + lexical + skill + role",
+                "scores_are_percentages": False,
+            },
+            "jobs": self.retrieve_jobs(role, skills, n=job_n) if role else [],
+            "learning": self.retrieve_learning_resources(skills, n=resource_n),
+            "career": self.retrieve_career_knowledge(query or role, n=career_n) if (query or role) else [],
+        }
+        return pack
 
     def get_stats(self) -> dict:
         self.initialize()
-        return {k: v.count() for k, v in self._collections.items()}
+        return {
+            "rag_version": self.RAG_VERSION,
+            "embedding_model": "BAAI/bge-small-en-v1.5",
+            "collections": {k: v.count() for k, v in self._collections.items()},
+            "total_documents": sum(v.count() for v in self._collections.values()),
+        }
 
 
 # Singleton — used by app.py once RAG-1 is verified and wired in (not yet)
